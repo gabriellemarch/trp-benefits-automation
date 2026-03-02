@@ -1,0 +1,19 @@
+{
+  "run_timestamp": "2026-03-02T08:45:27",
+  "input_files": {
+    "rbw": "C:/Users/C79084/Desktop/TRP data/rbw.csv",
+    "carpool": "C:/Users/C79084/Desktop/TRP data/carpool.csv",
+    "rad": "C:/Users/C79084/Desktop/TRP data/rad.csv",
+    "afv": "C:/Users/C79084/Desktop/TRP data/afv.csv"
+  },
+  "record_counts": {
+    "CARPOOL": 24094,
+    "RBW": 4869,
+    "RAD": 331,
+    "AFV": 82
+  },
+  "run_type": "MONTHLY",
+  "period_year": 2026,
+  "period_month": 2,
+  "random_seed": 335010602
+}
