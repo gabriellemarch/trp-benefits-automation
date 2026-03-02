@@ -1,0 +1,8 @@
+🔁 DAILY TEAM LOOP (REALISTIC VERSION)
+WHEN YOU CHANGED IT:
+edit → add → commit → push
+
+WHEN YOU WANT TO RETRIVE THE EDITS TO WORK ON
+pull → work → add → commit → push
+
+You alternate through GitHub as the middle.

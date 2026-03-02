@@ -146,7 +146,13 @@ def run_trp(
 
     status("Writing outputs...")
     core.write_outputs(outdir, master, lunch_report, winners_report, run_log)
-
+    core.write_lunch_checkoff_xlsx(
+    outdir=outdir,
+    lunch_report=lunch_report,
+    period_year=y,
+    period_month=m,
+    site_name="Chandler",
+    filename="lunch_checkoff.xlsx",)
     # sanity check
     core.assert_expected_outputs(outdir)
 

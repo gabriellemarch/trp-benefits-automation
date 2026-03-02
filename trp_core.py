@@ -13,6 +13,16 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
+import os
+import calendar
+from datetime import date
+from typing import Optional
+
+import pandas as pd
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.utils import get_column_letter
+
 # ----------------------------
 # Config
 # ----------------------------
@@ -286,7 +296,19 @@ def calculate_lunch_report(month_df: pd.DataFrame) -> pd.DataFrame:
     )
 
     trip_counts["lunches"] = trip_counts["trips"].apply(lunches_from_trips)
-    trip_counts = trip_counts.sort_values(["lunches", "trips"], ascending=[False, False]).reset_index(drop=True)
+
+    # -------------------------------------------------
+    # REMOVE PEOPLE WITH ZERO LUNCHES
+    # -------------------------------------------------
+    trip_counts = trip_counts[trip_counts["lunches"] > 0]
+
+    # sort after filtering
+    trip_counts = (
+        trip_counts
+        .sort_values(["lunches", "trips"], ascending=[False, False])
+        .reset_index(drop=True)
+    )
+
     return trip_counts[["name", "badge_id", "email", "trips", "lunches"]]
 
 # ----------------------------
@@ -355,6 +377,153 @@ def build_run_seed(run_type: str, year: int, month: Optional[int], quarter: Opti
 # ----------------------------
 # Output writing
 # ----------------------------
+
+
+def _last_day_of_month(y: int, m: int) -> date:
+    return date(y, m, calendar.monthrange(y, m)[1])
+
+
+def _add_month(y: int, m: int, delta: int = 1) -> tuple[int, int]:
+    # delta=1 means next month
+    nm = m + delta
+    ny = y
+    while nm > 12:
+        nm -= 12
+        ny += 1
+    while nm < 1:
+        nm += 12
+        ny -= 1
+    return ny, nm
+
+
+def write_lunch_checkoff_xlsx(
+    outdir: str,
+    lunch_report: pd.DataFrame,
+    period_year: int,
+    period_month: int,
+    site_name: str = "Chandler",
+    filename: str = "lunch_checkoff.xlsx",
+) -> str:
+    """
+    Creates a cafeteria-friendly checkoff sheet:
+    Name | # Lunches | 1 | 2 | 3 | 4 | 5
+    Slots above allowed lunches are blacked out.
+    """
+    os.makedirs(outdir, exist_ok=True)
+
+    # Expire = last day of NEXT month after the reporting month (matches your screenshot behavior)
+    ey, em = _add_month(period_year, period_month, delta=1)
+    expire_dt = _last_day_of_month(ey, em)
+    expire_str = expire_dt.strftime("%m/%d/%Y")
+
+    # Month label (e.g., "February")
+    month_name = calendar.month_name[period_month]
+
+    # Ensure expected columns exist
+    if not {"name", "lunches"}.issubset(set(lunch_report.columns)):
+        raise ValueError("lunch_report must contain columns: 'name' and 'lunches'")
+
+    df = lunch_report.copy()
+    df["lunches"] = pd.to_numeric(df["lunches"], errors="coerce").fillna(0).astype(int)
+    df = df.sort_values(["name"], ascending=True).reset_index(drop=True)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = f"{month_name} Lunches"
+
+    # --- Styling ---
+    bold = Font(bold=True)
+    title_font = Font(bold=True, size=14)
+    small_bold = Font(bold=True, size=10)
+
+    center = Alignment(horizontal="center", vertical="center")
+    left = Alignment(horizontal="left", vertical="center")
+
+    black_fill = PatternFill("solid", fgColor="000000")
+    header_fill = PatternFill("solid", fgColor="F2F2F2")
+
+    thin = Side(style="thin", color="000000")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    # --- Top title rows (like your screenshot) ---
+    # Row 1: site
+    ws["A1"] = site_name
+    ws["A1"].font = title_font
+    ws.merge_cells("A1:G1")
+    ws["A1"].alignment = left
+
+    # Row 2: month label left, expire right
+    ws["A2"] = f"{month_name} TRP lunches"
+    ws["A2"].font = small_bold
+    ws["A2"].alignment = left
+    ws.merge_cells("A2:D2")
+
+    ws["E2"] = f"ALL LUNCHES EXPIRE ON {expire_str}"
+    ws["E2"].font = small_bold
+    ws["E2"].alignment = Alignment(horizontal="right", vertical="center")
+    ws.merge_cells("E2:G2")
+
+    # Row 3 blank spacer
+    ws.merge_cells("A3:G3")
+
+    # Row 4: “Lunches” header spanning slot columns
+    ws["C4"] = "Lunches"
+    ws["C4"].font = bold
+    ws["C4"].alignment = center
+    ws.merge_cells("C4:G4")
+
+    # Row 5: table headers
+    headers = ["Name", "# Lunches", "1", "2", "3", "4", "5"]
+    for col_idx, h in enumerate(headers, start=1):
+        cell = ws.cell(row=5, column=col_idx, value=h)
+        cell.font = bold
+        cell.alignment = center if col_idx >= 2 else left
+        cell.fill = header_fill
+        cell.border = border
+
+    # --- Data rows start at row 6 ---
+    start_row = 6
+    for i, row in df.iterrows():
+        r = start_row + i
+        name = str(row["name"]).strip()
+        lunches = int(row["lunches"])
+
+        ws.cell(r, 1, name).alignment = left
+        ws.cell(r, 2, lunches).alignment = center
+
+        # borders for name + lunches
+        ws.cell(r, 1).border = border
+        ws.cell(r, 2).border = border
+
+        # Slot columns C..G are 1..5
+        for slot in range(1, 6):
+            c = 2 + slot  # slot 1 => col 3 (C)
+            cell = ws.cell(r, c, "")
+            cell.alignment = center
+            cell.border = border
+
+            # If slot is beyond their allowed lunches, black it out
+            if slot > lunches:
+                cell.fill = black_fill
+
+    # Column widths
+    ws.column_dimensions["A"].width = 28
+    ws.column_dimensions["B"].width = 10
+    for col in range(3, 8):
+        ws.column_dimensions[get_column_letter(col)].width = 6
+
+    # Row heights for nicer spacing
+    ws.row_dimensions[1].height = 22
+    ws.row_dimensions[2].height = 18
+    ws.row_dimensions[4].height = 18
+    ws.row_dimensions[5].height = 18
+
+    # Freeze headers so staff can scroll
+    ws.freeze_panes = "A6"
+
+    out_path = os.path.join(outdir, filename)
+    wb.save(out_path)
+    return out_path
 
 def ensure_outputs_dir(outdir: str) -> None:
     os.makedirs(outdir, exist_ok=True)

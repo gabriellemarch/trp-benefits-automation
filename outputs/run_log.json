@@ -1,5 +1,6 @@
 {
-  "run_timestamp": "2026-03-02T12:22:36",
+  "run_timestamp": "2026-03-02T13:49:57",
+  "mode": "MONTHLY",
   "input_files": {
     "rbw": "C:/Users/C79084/Downloads/Run Bike Walk Bus Activity Registrations.csv",
     "carpool": "C:/Users/C79084/Downloads/Carpool Daily Registrations.csv",
@@ -12,8 +13,11 @@
     "RAD": 331,
     "AFV": 82
   },
-  "run_type": "MONTHLY",
-  "period_year": 2026,
-  "period_month": 3,
-  "random_seed": 1322443926
+  "reporting_month_rule": "day<=15 => prev month; else current only on last business day; else prev month",
+  "selected_period": {
+    "year": 2026,
+    "month": 2
+  },
+  "selected_period_reason": "reporting_month_for_run(2026-03-02)",
+  "random_seed": 2217426243
 }
