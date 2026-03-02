@@ -1,14 +1,26 @@
 """
 TRP Benefits Automation — Modern GUI (Windows-friendly)
 
-Copy/paste this entire file as trp_gui.py
+Copy/paste this entire file as: trp_gui.py
 
-Requirements:
-- trp_gui.py and trp_draw.py must be in the SAME folder
-- trp_draw.py must define:
+✅ Clean architecture (recommended):
+- trp_gui.py  -> GUI only
+- trp_app.py  -> single backend entrypoint: run_trp(...)
+- trp_core.py -> pure functions (cleaning, filtering, drawings, outputs)
 
-    def run_trp(rbw_path, carpool_path, rad_path, afv_path,
-                outdir, mode, quarter=None, year=None, status_cb=None) -> str:
+This GUI expects trp_app.py to define:
+
+    def run_trp(
+        rbw_path: str,
+        carpool_path: str,
+        rad_path: str,
+        afv_path: str,
+        outdir: str,
+        mode: str,                 # "monthly" or "quarterly"
+        quarter: str | None = None,
+        year: int | None = None,
+        status_cb=None,
+    ) -> str:
         ...
         return outdir
 
@@ -44,11 +56,12 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 # ------------------ Backend import ------------------
+# IMPORTANT: GUI imports trp_app (not trp_draw) so you have ONE entry point.
 try:
-    import trp_draw  # type: ignore
+    import trp_app  # type: ignore
     BACKEND_OK = True
 except Exception as _imp_err:
-    trp_draw = None  # type: ignore
+    trp_app = None  # type: ignore
     BACKEND_OK = False
     IMPORT_ERROR_TEXT = str(_imp_err)
 
@@ -72,6 +85,7 @@ def _basename(p: str) -> str:
 
 
 def _open_folder(path: str) -> None:
+    """Open a folder cross-platform."""
     if not os.path.isdir(path):
         messagebox.showinfo("Open Outputs", "Output folder does not exist yet. Run the program first.")
         return
@@ -101,8 +115,8 @@ class TRPApp:
                 pass
 
         self.root.title("TRP Benefits Automation")
-        self.root.geometry("1050x720")
-        self.root.minsize(980, 680)
+        self.root.geometry("1050x740")
+        self.root.minsize(980, 700)
         self.root.resizable(True, True)
 
         # State
@@ -146,18 +160,19 @@ class TRPApp:
         ).grid(row=1, column=0, sticky="w", pady=(0, 14))
 
         # Cards
-        self._files_card = self._build_files_card(container, row=2)
-        self._options_card = self._build_options_card(container, row=3)
-        self._output_card = self._build_output_card(container, row=4)
-        self._actions_row = self._build_actions_row(container, row=5)
-        self._status_card = self._build_status_card(container, row=6)
+        self._build_files_card(container, row=2)
+        self._build_options_card(container, row=3)
+        self._build_output_card(container, row=4)
+        self._build_actions_row(container, row=5)
+        self._build_status_card(container, row=6)
 
+        # allow vertical expansion
         container.rowconfigure(7, weight=1)
 
     def _card(self, parent, title: str) -> ttk.LabelFrame:
         return ttk.LabelFrame(parent, text=title, padding=12)
 
-    def _build_files_card(self, parent, row: int) -> ttk.LabelFrame:
+    def _build_files_card(self, parent, row: int) -> None:
         card = self._card(parent, "Input Files")
         card.grid(row=row, column=0, sticky="ew", pady=(0, 14))
         card.columnconfigure(1, weight=1)
@@ -169,8 +184,6 @@ class TRPApp:
         self._file_row(card, 2, "Carpool", self.carpool_path)
         self._file_row(card, 3, "RAD", self.rad_path)
         self._file_row(card, 4, "AFV", self.afv_path)
-
-        return card
 
     def _file_row(self, parent, r: int, label: str, var: tk.StringVar) -> None:
         ttk.Label(parent, text=label).grid(row=r, column=0, sticky="w", padx=(0, 10), pady=6)
@@ -184,7 +197,7 @@ class TRPApp:
             btn = ttk.Button(parent, text="Browse…", command=lambda: self._choose_file(label, var))
         btn.grid(row=r, column=2, sticky="e", padx=(10, 0), pady=6)
 
-    def _build_options_card(self, parent, row: int) -> ttk.LabelFrame:
+    def _build_options_card(self, parent, row: int) -> None:
         card = self._card(parent, "Run Options")
         card.grid(row=row, column=0, sticky="ew", pady=(0, 14))
         card.columnconfigure(0, weight=1)
@@ -193,7 +206,7 @@ class TRPApp:
 
         ttk.Radiobutton(
             card,
-            text="Monthly (auto-detect most recent month from RBW + Carpool)",
+            text="Monthly (uses reporting-month rule; prevents early next-month entries from hijacking lunches)",
             variable=self.mode,
             value="monthly",
             command=self._apply_mode_visibility,
@@ -224,9 +237,7 @@ class TRPApp:
         self.year_entry = ttk.Entry(self.quarter_frame, textvariable=self.year, width=10)
         self.year_entry.grid(row=0, column=3, sticky="w", padx=(8, 0))
 
-        return card
-
-    def _build_output_card(self, parent, row: int) -> ttk.LabelFrame:
+    def _build_output_card(self, parent, row: int) -> None:
         card = self._card(parent, "Output")
         card.grid(row=row, column=0, sticky="ew", pady=(0, 14))
         card.columnconfigure(1, weight=1)
@@ -242,9 +253,7 @@ class TRPApp:
             btn = ttk.Button(card, text="Browse…", command=self._choose_outdir)
         btn.grid(row=0, column=2, sticky="e")
 
-        return card
-
-    def _build_actions_row(self, parent, row: int) -> ttk.Frame:
+    def _build_actions_row(self, parent, row: int) -> None:
         rowf = ttk.Frame(parent)
         rowf.grid(row=row, column=0, sticky="ew", pady=(0, 14))
         rowf.columnconfigure(0, weight=1)
@@ -268,9 +277,7 @@ class TRPApp:
         self.clear_btn.grid(row=0, column=1)
         self.open_btn.grid(row=0, column=0)
 
-        return rowf
-
-    def _build_status_card(self, parent, row: int) -> ttk.LabelFrame:
+    def _build_status_card(self, parent, row: int) -> None:
         card = self._card(parent, "Status")
         card.grid(row=row, column=0, sticky="ew")
         card.columnconfigure(0, weight=1)
@@ -281,8 +288,6 @@ class TRPApp:
         self.pbar = ttk.Progressbar(card, mode="indeterminate")
         self.pbar.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         self.pbar.grid_remove()
-
-        return card
 
     # ---------------- UI EVENTS ----------------
 
@@ -344,15 +349,10 @@ class TRPApp:
         outdir = self.outdir.get().strip() or str(Path.cwd() / "outputs")
 
         missing = []
-        if not rbw:
-            missing.append("RBW")
-        if not carpool:
-            missing.append("Carpool")
-        if not rad:
-            missing.append("RAD")
-        if not afv:
-            missing.append("AFV")
-
+        if not rbw: missing.append("RBW")
+        if not carpool: missing.append("Carpool")
+        if not rad: missing.append("RAD")
+        if not afv: missing.append("AFV")
         if missing:
             messagebox.showerror("Missing files", f"Please select files for: {', '.join(missing)}")
             return None
@@ -394,8 +394,8 @@ class TRPApp:
         if not BACKEND_OK:
             messagebox.showerror(
                 "Backend import failed",
-                "Could not import trp_draw.py.\n\n"
-                "Make sure trp_gui.py is in the same folder as trp_draw.py.\n\n"
+                "Could not import trp_app.py.\n\n"
+                "Make sure trp_gui.py is in the same folder as trp_app.py.\n\n"
                 f"Import error:\n{IMPORT_ERROR_TEXT}",
             )
             return
@@ -408,10 +408,10 @@ class TRPApp:
     def _run_backend_thread(self, cfg: RunConfig) -> None:
         try:
             def status_cb(msg: str) -> None:
-                # bind msg so thread + after() is safe
+                # bind msg to avoid closure issues
                 self.root.after(0, lambda m=msg: self._set_status(m))
 
-            out_used = trp_draw.run_trp(  # type: ignore[attr-defined]
+            out_used = trp_app.run_trp(  # type: ignore[attr-defined]
                 cfg.rbw_path,
                 cfg.carpool_path,
                 cfg.rad_path,
@@ -435,7 +435,7 @@ class TRPApp:
                     self._on_run_error(
                         "Run finished but expected output files were not found.\n\nMissing:\n"
                         + "\n".join(missing)
-                        + "\n\nCheck write_outputs() in trp_draw.py and confirm it writes these exact filenames."
+                        + "\n\nCheck your backend write_outputs() and confirm it writes these exact filenames."
                     )
                 else:
                     self._on_run_success(out_used)
