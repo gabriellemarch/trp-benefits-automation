@@ -23,6 +23,10 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
+try:
+    import win32com.client  # type: ignore
+except Exception:
+    win32com = None  # type: ignore
 # ----------------------------
 # Config
 # ----------------------------
@@ -286,12 +290,24 @@ def lunches_from_trips(n: int) -> int:
 
 def calculate_lunch_report(month_df: pd.DataFrame) -> pd.DataFrame:
     df = month_df[month_df["program"].isin([PROGRAM_RBW, PROGRAM_CARPOOL])].copy()
-    df = df[df["badge_id"].astype(str).str.len() > 0]
+    # df = df[df["badge_id"].astype(str).str.len() > 0]
 
+    # Build a participant key that prefers email over badge.
+    # This avoids duplicate rows in the lunch report when the same person
+    # has multiple badge IDs in the source systems.
+    email_key = df["email"].fillna("").astype(str).str.strip().str.lower()
+    badge_key = df["badge_id"].fillna("").astype(str).str.strip().str.upper()
+    df["participant_key"] = email_key
+    df.loc[df["participant_key"].str.len() == 0, "participant_key"] = badge_key
+
+    # Keep only participants we can identify by email or badge.
+    df = df[df["participant_key"].str.len() > 0]
     trip_counts = (
-        df.groupby(["badge_id"], as_index=False)
-          .agg(trips=("badge_id", "size"),
+        # df.groupby(["badge_id"], as_index=False)
+           df.groupby(["participant_key"], as_index=False)
+           .agg(trips=("badge_id", "size"),
                name=("name", "first"),
+               badge_id=("badge_id", "first"),
                email=("email", "first"))
     )
 
@@ -545,4 +561,73 @@ def assert_expected_outputs(outdir: str) -> None:
         if not os.path.exists(p):
             missing.append(p)
     if missing:
+        # raise FileNotFoundError("Expected output files missing:\n" + "\n".join(missing))
         raise FileNotFoundError("Expected output files missing:\n" + "\n".join(missing))
+    
+def create_outlook_drafts(
+    lunch_report: pd.DataFrame,
+    winners_report: pd.DataFrame,
+    lunch_checklist_path: str,
+) -> Dict[str, int]:
+    """
+    Creates two Outlook drafts in the current user's Outlook desktop profile:
+      1) Lunch email to everyone with 1+ lunches, attaching lunch checklist.
+      2) Winner notification email to all drawing winners.
+
+    Returns counts for recipients in each draft.
+    """
+    if win32com is None:
+        raise RuntimeError(
+            "pywin32 is not installed. Install it with: pip install pywin32"
+        )
+
+    lunch_emails = (
+        lunch_report.get("email", pd.Series(dtype=str))
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .str.lower()
+    )
+    lunch_emails = sorted({e for e in lunch_emails if "@" in e})
+
+    winner_emails = (
+        winners_report.get("email", pd.Series(dtype=str))
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .str.lower()
+    )
+    winner_emails = sorted({e for e in winner_emails if "@" in e})
+
+    outlook = win32com.client.Dispatch("Outlook.Application")
+
+    if lunch_emails:
+        lunch_mail = outlook.CreateItem(0)
+        lunch_mail.To = "; ".join(lunch_emails)
+        lunch_mail.Subject = "TRP Lunch Benefit: Your Lunch Checklist"
+        lunch_mail.Body = (
+            "Hi everyone,\n\n"
+            "You earned one or more TRP lunches for this run. "
+            "Please see the attached lunch checklist for redemption details.\n\n"
+            "Thank you,\nTRP Team"
+        )
+        if os.path.exists(lunch_checklist_path):
+            lunch_mail.Attachments.Add(os.path.abspath(lunch_checklist_path))
+        lunch_mail.Save()
+
+    if winner_emails:
+        winner_mail = outlook.CreateItem(0)
+        winner_mail.To = "; ".join(winner_emails)
+        winner_mail.Subject = "Congratulations! You Won a TRP Gift Card"
+        winner_mail.Body = (
+            "Hi,\n\n"
+            "Congratulations—you were selected as a TRP drawing winner. "
+            "You will receive your gift card soon.\n\n"
+            "Thank you for participating,\nTRP Team"
+        )
+        winner_mail.Save()
+
+    return {
+        "lunch_recipients": len(lunch_emails),
+        "winner_recipients": len(winner_emails),
+    }

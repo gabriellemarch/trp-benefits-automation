@@ -78,7 +78,7 @@ class RunConfig:
     mode: str  # "monthly" | "quarterly"
     quarter: Optional[str] = None
     year: Optional[int] = None
-
+    create_email_drafts: bool = False
 
 def _basename(p: str) -> str:
     return os.path.basename(p) if p else ""
@@ -132,6 +132,7 @@ class TRPApp:
         self.year = tk.StringVar(value=str(datetime.now().year))
 
         self.status = tk.StringVar(value="Select files to begin.")
+        self.create_email_drafts = tk.BooleanVar(value=False)
         self.is_running = tk.BooleanVar(value=False)
 
         # Build UI
@@ -235,6 +236,14 @@ class TRPApp:
 
         ttk.Label(self.quarter_frame, text="Year:").grid(row=0, column=2, sticky="w")
         self.year_entry = ttk.Entry(self.quarter_frame, textvariable=self.year, width=10)
+
+        self.email_drafts_cb = ttk.Checkbutton(
+            card,
+            text="Create Outlook draft emails (lunch recipients + gift card winners)",
+            variable=self.create_email_drafts,
+        )
+        self.email_drafts_cb.grid(row=4, column=0, sticky="w", pady=(12, 0))
+
         self.year_entry.grid(row=0, column=3, sticky="w", padx=(8, 0))
 
     def _build_output_card(self, parent, row: int) -> None:
@@ -384,6 +393,7 @@ class TRPApp:
             mode=mode,
             quarter=quarter,
             year=year,
+            create_email_drafts=bool(self.create_email_drafts.get()),
         )
 
     def _on_run_clicked(self) -> None:
@@ -421,6 +431,7 @@ class TRPApp:
                 quarter=cfg.quarter,
                 year=cfg.year,
                 status_cb=status_cb,
+                create_email_drafts=cfg.create_email_drafts,
             )
 
             def finish() -> None:

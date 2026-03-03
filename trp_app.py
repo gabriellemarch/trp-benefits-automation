@@ -18,6 +18,7 @@ def run_trp(
     mode: str,                 # "monthly" or "quarterly"
     quarter: str | None = None,
     year: int | None = None,
+    create_email_drafts: bool = False,
     status_cb=None,
 ) -> str:
     """
@@ -71,6 +72,9 @@ def run_trp(
     winners_all = []
     exclude_keys = set()
 
+    report_year: int
+    report_month: int
+
     # -------------------------
     # MONTHLY
     # -------------------------
@@ -97,6 +101,7 @@ def run_trp(
 
         status(f"Calculating lunches for {y}-{m:02d}...")
         lunch_report = core.calculate_lunch_report(month_df)
+        report_year, report_month = y, m
 
         status("Drawing monthly winners (8)...")
         monthly_winners, exclude_keys = core.run_monthly_drawing(month_df, exclude_keys, seed=seed)
@@ -128,6 +133,7 @@ def run_trp(
 
         status(f"Calculating lunches for {my}-{mm:02d} (most recent month in quarter)...")
         lunch_report = core.calculate_lunch_report(month_df)
+        report_year, report_month = my, mm
 
         status("Drawing winners (Monthly 8 + RAD 4 + AFV 2) with cross-pool exclusions...")
         monthly_winners, exclude_keys = core.run_monthly_drawing(month_df, exclude_keys, seed=seed + 1)
@@ -146,13 +152,29 @@ def run_trp(
 
     status("Writing outputs...")
     core.write_outputs(outdir, master, lunch_report, winners_report, run_log)
-    core.write_lunch_checkoff_xlsx(
-    outdir=outdir,
-    lunch_report=lunch_report,
-    period_year=y,
-    period_month=m,
-    site_name="Chandler",
-    filename="lunch_checkoff.xlsx",)
+    
+    lunch_checklist_path = core.write_lunch_checkoff_xlsx(
+        outdir=outdir,
+        lunch_report=lunch_report,
+        period_year=report_year,
+        period_month=report_month,
+        site_name="Chandler",
+        filename="lunch_checkoff.xlsx",
+    )
+
+    if create_email_drafts:
+        status("Creating Outlook drafts...")
+        draft_counts = core.create_outlook_drafts(
+            lunch_report=lunch_report,
+            winners_report=winners_report,
+            lunch_checklist_path=lunch_checklist_path,
+        )
+        run_log["outlook_drafts"] = {
+            "enabled": True,
+            **draft_counts,
+        }
+        core.write_outputs(outdir, master, lunch_report, winners_report, run_log)
+
     # sanity check
     core.assert_expected_outputs(outdir)
 

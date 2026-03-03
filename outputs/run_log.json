@@ -1,5 +1,5 @@
 {
-  "run_timestamp": "2026-03-02T13:49:57",
+  "run_timestamp": "2026-03-03T10:13:43",
   "mode": "MONTHLY",
   "input_files": {
     "rbw": "C:/Users/C79084/Downloads/Run Bike Walk Bus Activity Registrations.csv",
@@ -18,6 +18,11 @@
     "year": 2026,
     "month": 2
   },
-  "selected_period_reason": "reporting_month_for_run(2026-03-02)",
-  "random_seed": 2217426243
+  "selected_period_reason": "reporting_month_for_run(2026-03-03)",
+  "random_seed": 2217426243,
+  "outlook_drafts": {
+    "enabled": true,
+    "lunch_recipients": 58,
+    "winner_recipients": 8
+  }
 }
