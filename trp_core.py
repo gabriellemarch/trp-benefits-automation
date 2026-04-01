@@ -111,6 +111,21 @@ def parse_datetime(series: pd.Series) -> pd.Series:
     """
     return pd.to_datetime(series, errors="coerce")
 
+def get_first_column(df: pd.DataFrame, candidates: List[str]) -> pd.Series:
+    """
+    Return the first matching column by tolerant header comparison.
+    Comparison is case-insensitive and ignores non-alphanumeric chars.
+    """
+    normalized = {
+        re.sub(r"[^a-z0-9]", "", str(col).strip().lower()): col
+        for col in df.columns
+    }
+    for candidate in candidates:
+        key = re.sub(r"[^a-z0-9]", "", candidate.strip().lower())
+        if key in normalized:
+            return df[normalized[key]]
+    return pd.Series([None] * len(df))
+
 # ----------------------------
 # Loaders: map each file to standard columns
 # ----------------------------
@@ -153,10 +168,18 @@ def load_rad(path: str) -> pd.DataFrame:
 
 def load_afv(path: str) -> pd.DataFrame:
     df = read_table(path)
+
+    
+    def _pick(*candidates: str) -> pd.Series:
+        for col in candidates:
+            if col in df.columns:
+                return df[col]
+        return pd.Series([None] * len(df))
+
     out = pd.DataFrame({
-        "name_raw": df.get("Name"),
-        "badge_raw": df.get("Badge #"),
-        "email_raw": df.get("Email"),
+        "name_raw": get_first_column(df, ["Name", "Employee Name", "Full Name"]),
+        "badge_raw": get_first_column(df, ["Badge #", "Badge ID Number", "Badge Number", "Badge"]),
+        "email_raw": get_first_column(df, ["Email", "Microchip Email", "Email Address"]),
         "created_raw": pd.Series([None] * len(df)),
     })
     out["program"] = PROGRAM_AFV
@@ -601,6 +624,7 @@ def create_outlook_drafts(
     lunch_report: pd.DataFrame,
     winners_report: pd.DataFrame,
     lunch_checklist_path: str,
+    include_lunch_email: bool = True,
 ) -> Dict[str, int]:
     """
     Creates two Outlook drafts in the current user's Outlook desktop profile:

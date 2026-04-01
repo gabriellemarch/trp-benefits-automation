@@ -173,6 +173,7 @@ def run_trp(
             lunch_report=lunch_report,
             winners_report=winners_report,
             lunch_checklist_path=lunch_checklist_path,
+            include_lunch_email=(mode != "quarterly"),
         )
         run_log["outlook_drafts"] = {
             "enabled": True,
@@ -188,17 +189,7 @@ def run_trp(
             "forced_for_quarterly": False,
         }
         core.write_outputs(outdir, master, lunch_report, winners_report, run_log)
-        status("Creating Outlook drafts...")
-        draft_counts = core.create_outlook_drafts(
-            lunch_report=lunch_report,
-            winners_report=winners_report,
-            lunch_checklist_path=lunch_checklist_path,
-        )
-        run_log["outlook_drafts"] = {
-            "enabled": True,
-            **draft_counts,
-        }
-        core.write_outputs(outdir, master, lunch_report, winners_report, run_log)
+        
 
     # sanity check
     core.assert_expected_outputs(outdir)
