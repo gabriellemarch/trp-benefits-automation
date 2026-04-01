@@ -1,28 +1,32 @@
 {
-  "run_timestamp": "2026-03-03T10:13:43",
-  "mode": "MONTHLY",
+  "run_timestamp": "2026-04-01T09:16:23",
+  "mode": "QUARTERLY",
   "input_files": {
-    "rbw": "C:/Users/C79084/Downloads/Run Bike Walk Bus Activity Registrations.csv",
-    "carpool": "C:/Users/C79084/Downloads/Carpool Daily Registrations.csv",
-    "rad": "C:/Users/C79084/Downloads/Refuel After Dark Registration.csv",
-    "afv": "C:/Users/C79084/Desktop/TRP data/afv.csv"
+    "rbw": "C:/Users/C79084/OneDrive - Microchip Technology Inc/Desktop/TRP data/Run Bike Walk Bus.csv",
+    "carpool": "C:/Users/C79084/OneDrive - Microchip Technology Inc/Desktop/TRP data/carpool.csv",
+    "rad": "C:/Users/C79084/OneDrive - Microchip Technology Inc/Desktop/TRP data/Refuel After Dark Registration (1).csv",
+    "afv": "C:/Users/C79084/OneDrive - Microchip Technology Inc/Desktop/TRP data/Copy of AFV tracking.csv"
   },
   "record_counts": {
-    "CARPOOL": 24156,
-    "RBW": 4882,
-    "RAD": 331,
-    "AFV": 82
+    "CARPOOL": 24874,
+    "RBW": 5032,
+    "RAD": 342,
+    "AFV": 103
   },
-  "reporting_month_rule": "day<=15 => prev month; else current only on last business day; else prev month",
-  "selected_period": {
+  "fiscal_quarter": "Q4",
+  "period_year": 2026,
+  "quarter_calendar_year_used": 2026,
+  "quarter_year_interpretation": "calendar_year",
+  "quarter_recent_month_used_for_lunches": {
     "year": 2026,
-    "month": 2
+    "month": 3
   },
-  "selected_period_reason": "reporting_month_for_run(2026-03-03)",
-  "random_seed": 2217426243,
+  "random_seed": 2293187429,
   "outlook_drafts": {
     "enabled": true,
-    "lunch_recipients": 58,
-    "winner_recipients": 8
+    "requested": false,
+    "forced_for_quarterly": true,
+    "lunch_recipients": 65,
+    "winner_recipients": 12
   }
 }

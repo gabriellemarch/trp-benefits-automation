@@ -271,6 +271,39 @@ def most_recent_month_in_quarter(master: pd.DataFrame, q: str, year: int) -> Tup
     max_dt = df["created_date"].max()
     return int(max_dt.year), int(max_dt.month)
 
+def resolve_quarter_calendar_year(master: pd.DataFrame, q: str, year: int) -> Tuple[int, str]:
+    """
+    Resolve which calendar year should be used for quarter filtering.
+
+    Supports two common user conventions:
+      1) Calendar-year quarter selection (existing behavior): Qx + YYYY maps to months in YYYY.
+      2) Fiscal-year-ending convention: FY2026 means:
+         - Q1/Q2/Q3 in calendar 2025
+         - Q4 in calendar 2026
+
+    Returns:
+      (calendar_year_to_filter, convention_label)
+    """
+    q = q.upper()
+    if q not in FISCAL_QUARTERS:
+        raise ValueError(f"Quarter must be one of {list(FISCAL_QUARTERS.keys())}")
+
+    rbw_cp = master[master["program"].isin([PROGRAM_RBW, PROGRAM_CARPOOL])].copy()
+
+    # Convention A: calendar-year quarter (legacy behavior)
+    calendar_year = int(year)
+    a = filter_quarter(rbw_cp, q, calendar_year).dropna(subset=["created_date"])
+
+    # Convention B: fiscal-year ending label (FY2026 => Q1/Q2/Q3 in 2025, Q4 in 2026)
+    fy_calendar_year = int(year) if q == "Q4" else int(year) - 1
+    b = filter_quarter(rbw_cp, q, fy_calendar_year).dropna(subset=["created_date"])
+
+    if not a.empty:
+        return calendar_year, "calendar_year"
+    if not b.empty:
+        return fy_calendar_year, "fiscal_year_ending"
+    return calendar_year, "calendar_year"
+
 # ----------------------------
 # Rewards: lunches
 # ----------------------------
@@ -372,7 +405,7 @@ def run_afv_drawing(master: pd.DataFrame, exclude_keys: set, seed: int) -> Tuple
     pool = unique_pool(afv)
     pool = pool[~pool["key"].isin(exclude_keys)].reset_index(drop=True)
 
-    winners = draw_winners(pool, n=2, seed=seed)
+    winners = draw_winners(pool, n=4, seed=seed)
     winners["program_award"] = "QUARTERLY_AFV"
 
     new_exclude = set(winners["key"].tolist())

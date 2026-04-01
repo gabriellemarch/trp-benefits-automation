@@ -120,13 +120,16 @@ def run_trp(
         status(f"Running quarterly logic for {q} {y}...")
         run_log["fiscal_quarter"] = q
         run_log["period_year"] = y
+        quarter_calendar_year, quarter_year_mode = core.resolve_quarter_calendar_year(master, q, y)
+        run_log["quarter_calendar_year_used"] = quarter_calendar_year
+        run_log["quarter_year_interpretation"] = quarter_year_mode
 
         # RBW/CARPOOL month used for lunches + monthly drawing:
-        my, mm = core.most_recent_month_in_quarter(master, q, y)
+        my, mm = core.most_recent_month_in_quarter(master, q, quarter_calendar_year)
         run_log["quarter_recent_month_used_for_lunches"] = {"year": my, "month": mm}
 
         month_df = core.filter_month(master, my, mm)
-        quarter_df = core.filter_quarter(master, q, y)
+        quarter_df = core.filter_quarter(master, q, quarter_calendar_year)
 
         seed = core.build_run_seed("QUARTERLY", y, mm, q)
         run_log["random_seed"] = seed
@@ -135,7 +138,7 @@ def run_trp(
         lunch_report = core.calculate_lunch_report(month_df)
         report_year, report_month = my, mm
 
-        status("Drawing winners (Monthly 8 + RAD 4 + AFV 2) with cross-pool exclusions...")
+        status("Drawing winners (Monthly 8 + RAD 4 + AFV 4) with cross-pool exclusions...")
         monthly_winners, exclude_keys = core.run_monthly_drawing(month_df, exclude_keys, seed=seed + 1)
         winners_all.append(monthly_winners)
 
@@ -162,7 +165,29 @@ def run_trp(
         filename="lunch_checkoff.xlsx",
     )
 
-    if create_email_drafts:
+
+    should_create_email_drafts = bool(create_email_drafts) or mode == "quarterly"
+    if should_create_email_drafts:
+        status("Creating Outlook drafts...")
+        draft_counts = core.create_outlook_drafts(
+            lunch_report=lunch_report,
+            winners_report=winners_report,
+            lunch_checklist_path=lunch_checklist_path,
+        )
+        run_log["outlook_drafts"] = {
+            "enabled": True,
+            "requested": bool(create_email_drafts),
+            "forced_for_quarterly": mode == "quarterly",
+            **draft_counts,
+        }
+        core.write_outputs(outdir, master, lunch_report, winners_report, run_log)
+    else:
+        run_log["outlook_drafts"] = {
+            "enabled": False,
+            "requested": bool(create_email_drafts),
+            "forced_for_quarterly": False,
+        }
+        core.write_outputs(outdir, master, lunch_report, winners_report, run_log)
         status("Creating Outlook drafts...")
         draft_counts = core.create_outlook_drafts(
             lunch_report=lunch_report,
