@@ -346,27 +346,52 @@ def lunches_from_trips(n: int) -> int:
 
 def calculate_lunch_report(month_df: pd.DataFrame) -> pd.DataFrame:
     df = month_df[month_df["program"].isin([PROGRAM_RBW, PROGRAM_CARPOOL])].copy()
-    # df = df[df["badge_id"].astype(str).str.len() > 0]
+    df["name_key"] = df["name"].fillna("").astype(str).str.strip().str.lower()
+    df["badge_key"] = df["badge_id"].fillna("").astype(str).str.strip().str.upper()
+    df["email_key"] = df["email"].fillna("").astype(str).str.strip().str.lower()
 
-    # Build a participant key that prefers email over badge.
-    # This avoids duplicate rows in the lunch report when the same person
-    # has multiple badge IDs in the source systems.
-    email_key = df["email"].fillna("").astype(str).str.strip().str.lower()
-    badge_key = df["badge_id"].fillna("").astype(str).str.strip().str.upper()
-    df["participant_key"] = email_key
-    df.loc[df["participant_key"].str.len() == 0, "participant_key"] = badge_key
+    # Primary dedupe rule for lunch report:
+    # combine rows when both badge and name match (even if emails differ).
+    df["participant_key"] = df["name_key"] + "|" + df["badge_key"]
 
-    # Keep only participants we can identify by email or badge.
-    df = df[df["participant_key"].str.len() > 0]
-    trip_counts = (
-        # df.groupby(["badge_id"], as_index=False)
-           df.groupby(["participant_key"], as_index=False)
-           .agg(trips=("badge_id", "size"),
-               name=("name", "first"),
-               badge_id=("badge_id", "first"),
-               email=("email", "first"))
+    # If badge is missing, fallback to name+email so anonymous rows still count.
+    missing_badge = df["badge_key"].str.len() == 0
+    df.loc[missing_badge, "participant_key"] = df.loc[missing_badge, "name_key"] + "|" + df.loc[missing_badge, "email_key"]
+
+    # Keep only rows we can identify.
+    df = df[df["participant_key"].str.strip("|").str.len() > 0]
+
+    email_stats = (
+        df[df["email_key"].str.len() > 0]
+        .groupby(["participant_key", "email_key"], as_index=False)
+        .size()
+        .rename(columns={"size": "email_entry_count"})
     )
+    if email_stats.empty:
+        preferred_email = pd.DataFrame(columns=["participant_key", "email"])
+    else:
+        email_stats["has_microchip"] = email_stats["email_key"].str.contains("microchip", case=False, na=False)
+        preferred_email = (
+            email_stats.sort_values(
+                ["participant_key", "has_microchip", "email_entry_count", "email_key"],
+                ascending=[True, False, False, True],
+            )
+            .drop_duplicates(subset=["participant_key"], keep="first")
+            .rename(columns={"email_key": "email"})
+            [["participant_key", "email"]]
+        )
 
+    trip_counts = (
+        df.groupby(["participant_key"], as_index=False)
+        .agg(
+            trips=("participant_key", "size"),
+            name=("name", "first"),
+            badge_id=("badge_id", "first"),
+        )
+    )
+    trip_counts = trip_counts.merge(preferred_email, on="participant_key", how="left")
+    trip_counts["email"] = trip_counts["email"].fillna("")
+    
     trip_counts["lunches"] = trip_counts["trips"].apply(lunches_from_trips)
 
     # -------------------------------------------------

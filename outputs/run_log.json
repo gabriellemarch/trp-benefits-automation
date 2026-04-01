@@ -1,17 +1,17 @@
 {
-  "run_timestamp": "2026-04-01T15:07:00",
+  "run_timestamp": "2026-04-01T15:38:39",
   "mode": "QUARTERLY",
   "input_files": {
     "rbw": "C:/Users/C79084/OneDrive - Microchip Technology Inc/Desktop/TRP data/Run Bike Walk Bus.csv",
     "carpool": "C:/Users/C79084/OneDrive - Microchip Technology Inc/Desktop/TRP data/carpool.csv",
     "rad": "C:/Users/C79084/OneDrive - Microchip Technology Inc/Desktop/TRP data/Refuel After Dark Registration (1).csv",
-    "afv": "C:/Users/C79084/OneDrive - Microchip Technology Inc/Desktop/TRP data/Copy of AFV tracking.csv"
+    "afv": "C:/Users/C79084/Downloads/AFV tracking lll.csv"
   },
   "record_counts": {
     "CARPOOL": 24874,
     "RBW": 5032,
     "RAD": 342,
-    "AFV": 103
+    "AFV": 82
   },
   "fiscal_quarter": "Q4",
   "period_year": 2026,
@@ -26,7 +26,7 @@
     "enabled": true,
     "requested": true,
     "forced_for_quarterly": true,
-    "lunch_recipients": 65,
-    "winner_recipients": 12
+    "lunch_recipients": 64,
+    "winner_recipients": 15
   }
 }
