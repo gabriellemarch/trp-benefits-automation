@@ -360,17 +360,22 @@ def lunches_from_trips(n: int) -> int:
 
 def calculate_lunch_report(month_df: pd.DataFrame) -> pd.DataFrame:
     df = month_df[month_df["program"].isin([PROGRAM_RBW, PROGRAM_CARPOOL])].copy()
+
+# Normalize participant keys + created date for a single combined RBW/CARPOOL pipeline.
+    df["name"] = df["name"].apply(smart_title)
+    df["badge_id"] = df["badge_id"].apply(clean_badge)
+    df["email"] = df["email"].apply(clean_email)
+    df["created_date"] = pd.to_datetime(df["created_date"], errors="coerce").dt.date
+
+    # Reported values are derived from raw submissions before trip dedupe, for audit checks.
+
     df["name_key"] = df["name"].fillna("").astype(str).str.strip().str.lower()
     df["badge_key"] = df["badge_id"].fillna("").astype(str).str.strip().str.upper()
     df["email_key"] = df["email"].fillna("").astype(str).str.strip().str.lower()
     df["trip_date"] = pd.to_datetime(df["created_date"], errors="coerce").dt.date
 
-    # Primary dedupe rule for lunch report:
-    # combine rows when both badge and name match (even if emails differ).
-    df["participant_key"] = df["name_key"] + "|" + df["badge_key"]
-
-    # If badge is missing, fallback to name+email so anonymous rows still count.
-    missing_badge = df["badge_key"].str.len() == 0
+    df["participant_key"] = df["badge_key"]
+    missing_badge = df["participant_key"].str.len() == 0
     df.loc[missing_badge, "participant_key"] = df.loc[missing_badge, "name_key"] + "|" + df.loc[missing_badge, "email_key"]
 
     # Keep only rows we can identify.
