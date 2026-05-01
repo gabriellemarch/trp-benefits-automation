@@ -62,13 +62,27 @@ def read_table(path: str) -> pd.DataFrame:
     if not p.exists():
         raise FileNotFoundError(f"File not found: {path}")
 
+    def _read_csv_with_fallbacks(csv_path: str) -> pd.DataFrame:
+        # Vendors occasionally export CSVs in cp1252/latin-1 instead of utf-8.
+        encodings = ["utf-8", "utf-8-sig", "cp1252", "latin-1"]
+        last_error = None
+        for enc in encodings:
+            try:
+                return pd.read_csv(csv_path, encoding=enc)
+            except UnicodeDecodeError as exc:
+                last_error = exc
+        raise ValueError(
+            f"Could not decode CSV '{csv_path}' with supported encodings {encodings}. Last error: {last_error}"
+        )
+
+
     ext = p.suffix.lower()
     if ext in [".csv"]:
-        return pd.read_csv(path)
+        return _read_csv_with_fallbacks(path)
     if ext in [".xlsx", ".xls"]:
         return pd.read_excel(path)
-    # fallback: try csv
-    return pd.read_csv(path)
+     # fallback: try as csv
+    return _read_csv_with_fallbacks(path)
 
 # ----------------------------
 # Helpers: cleaning
@@ -349,6 +363,7 @@ def calculate_lunch_report(month_df: pd.DataFrame) -> pd.DataFrame:
     df["name_key"] = df["name"].fillna("").astype(str).str.strip().str.lower()
     df["badge_key"] = df["badge_id"].fillna("").astype(str).str.strip().str.upper()
     df["email_key"] = df["email"].fillna("").astype(str).str.strip().str.lower()
+    df["trip_date"] = pd.to_datetime(df["created_date"], errors="coerce").dt.date
 
     # Primary dedupe rule for lunch report:
     # combine rows when both badge and name match (even if emails differ).
@@ -360,6 +375,17 @@ def calculate_lunch_report(month_df: pd.DataFrame) -> pd.DataFrame:
 
     # Keep only rows we can identify.
     df = df[df["participant_key"].str.strip("|").str.len() > 0]
+
+   # RBW and CARPOOL entries are each capped at one trip per person per day.
+    # If someone logs multiple trips in either program on the same day,
+    # keep only the first row for that person/date/program.
+    rbw_carpool = (
+        df[df["program"].isin([PROGRAM_RBW, PROGRAM_CARPOOL])]
+        .sort_values(["program", "participant_key", "created_date"], ascending=[True, True, True])
+        .drop_duplicates(subset=["program", "participant_key", "trip_date"], keep="first")
+    )
+    other_programs = df[~df["program"].isin([PROGRAM_RBW, PROGRAM_CARPOOL])]
+    df = pd.concat([other_programs, rbw_carpool], ignore_index=True)
 
     email_stats = (
         df[df["email_key"].str.len() > 0]
@@ -621,6 +647,39 @@ def write_lunch_checkoff_xlsx(
     out_path = os.path.join(outdir, filename)
     wb.save(out_path)
     return out_path
+
+def export_lunch_checkoff_pdf(xlsx_path: str) -> Optional[str]:
+    """
+    Best-effort export of the lunch checklist workbook to PDF.
+    Returns the PDF path when successful, else None.
+    """
+    if win32com is None or not os.path.exists(xlsx_path):
+        return None
+
+    pdf_path = os.path.splitext(xlsx_path)[0] + ".pdf"
+    excel = None
+    wb = None
+    try:
+        excel = win32com.client.Dispatch("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+        wb = excel.Workbooks.Open(os.path.abspath(xlsx_path))
+        wb.ExportAsFixedFormat(0, os.path.abspath(pdf_path))  # 0 = PDF
+        return pdf_path if os.path.exists(pdf_path) else None
+    except Exception:
+        return None
+    finally:
+        try:
+            if wb is not None:
+                wb.Close(False)
+        except Exception:
+            pass
+        try:
+            if excel is not None:
+                excel.Quit()
+        except Exception:
+            pass
+
 
 def ensure_outputs_dir(outdir: str) -> None:
     os.makedirs(outdir, exist_ok=True)

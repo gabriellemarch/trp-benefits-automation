@@ -1,32 +1,28 @@
 {
-  "run_timestamp": "2026-04-01T15:38:39",
-  "mode": "QUARTERLY",
+  "run_timestamp": "2026-05-01T13:18:01",
+  "mode": "MONTHLY",
   "input_files": {
-    "rbw": "C:/Users/C79084/OneDrive - Microchip Technology Inc/Desktop/TRP data/Run Bike Walk Bus.csv",
+    "rbw": "C:/Users/C79084/OneDrive - Microchip Technology Inc/Desktop/TRP data/rbw(1).csv",
     "carpool": "C:/Users/C79084/OneDrive - Microchip Technology Inc/Desktop/TRP data/carpool.csv",
-    "rad": "C:/Users/C79084/OneDrive - Microchip Technology Inc/Desktop/TRP data/Refuel After Dark Registration (1).csv",
-    "afv": "C:/Users/C79084/Downloads/AFV tracking lll.csv"
+    "rad": "",
+    "afv": ""
   },
   "record_counts": {
-    "CARPOOL": 24874,
-    "RBW": 5032,
-    "RAD": 342,
-    "AFV": 82
+    "CARPOOL": 25546,
+    "RBW": 5213
   },
-  "fiscal_quarter": "Q4",
-  "period_year": 2026,
-  "quarter_calendar_year_used": 2026,
-  "quarter_year_interpretation": "calendar_year",
-  "quarter_recent_month_used_for_lunches": {
+  "reporting_month_rule": "day<=15 => prev month; else current only on last business day; else prev month",
+  "selected_period": {
     "year": 2026,
-    "month": 3
+    "month": 4
   },
-  "random_seed": 2293187429,
+  "selected_period_reason": "reporting_month_for_run(2026-05-01)",
+  "random_seed": 1721242669,
   "outlook_drafts": {
     "enabled": true,
     "requested": true,
-    "forced_for_quarterly": true,
-    "lunch_recipients": 64,
-    "winner_recipients": 15
+    "forced_for_quarterly": false,
+    "lunch_recipients": 60,
+    "winner_recipients": 8
   }
 }

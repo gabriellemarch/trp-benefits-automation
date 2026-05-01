@@ -48,8 +48,20 @@ def run_trp(
     status("Loading files...")
     rbw = core.load_rbw(rbw_path)
     carpool = core.load_carpool(carpool_path)
-    rad = core.load_rad(rad_path)
-    afv = core.load_afv(afv_path)
+    if mode == "quarterly":
+        rad = core.load_rad(rad_path)
+        afv = core.load_afv(afv_path)
+    else:
+        empty_cols = {
+            "name_raw": pd.Series(dtype="string"),
+            "badge_raw": pd.Series(dtype="string"),
+            "email_raw": pd.Series(dtype="string"),
+            "created_raw": pd.Series(dtype="string"),
+            "created_date": pd.Series(dtype="datetime64[ns]"),
+            "program": pd.Series(dtype="string"),
+        }
+        rad = pd.DataFrame(empty_cols)
+        afv = pd.DataFrame(empty_cols)
 
     status("Cleaning + merging datasets...")
     master_raw = pd.concat([rbw, carpool, rad, afv], ignore_index=True)
@@ -164,7 +176,7 @@ def run_trp(
         site_name="Chandler",
         filename="lunch_checkoff.xlsx",
     )
-
+    lunch_checklist_pdf_path = core.export_lunch_checkoff_pdf(lunch_checklist_path)
 
     should_create_email_drafts = bool(create_email_drafts) or mode == "quarterly"
     if should_create_email_drafts:
@@ -172,7 +184,7 @@ def run_trp(
         draft_counts = core.create_outlook_drafts(
             lunch_report=lunch_report,
             winners_report=winners_report,
-            lunch_checklist_path=lunch_checklist_path,
+            lunch_checklist_path=lunch_checklist_pdf_path or lunch_checklist_path,
             include_lunch_email=(mode != "quarterly"),
         )
         run_log["outlook_drafts"] = {

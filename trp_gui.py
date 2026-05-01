@@ -357,19 +357,23 @@ class TRPApp:
         afv = self.afv_path.get().strip()
         outdir = self.outdir.get().strip() or str(Path.cwd() / "outputs")
 
-        missing = []
-        if not rbw: missing.append("RBW")
-        if not carpool: missing.append("Carpool")
-        if not rad: missing.append("RAD")
-        if not afv: missing.append("AFV")
-        if missing:
-            messagebox.showerror("Missing files", f"Please select files for: {', '.join(missing)}")
-            return None
-
         mode = self.mode.get()
         if mode not in ("monthly", "quarterly"):
             messagebox.showerror("Invalid mode", "Please choose Monthly or Quarterly.")
             return None
+                    
+
+        missing = []
+        if not rbw: missing.append("RBW")
+        if not carpool: missing.append("Carpool")
+        if mode == "quarterly":
+            if not rad: missing.append("RAD")
+            if not afv: missing.append("AFV")
+        if missing:
+            messagebox.showerror("Missing files", f"Please select files for: {', '.join(missing)}")
+            return None
+
+      
 
         quarter = None
         year = None
