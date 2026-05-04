@@ -375,6 +375,16 @@ class TRPApp:
 
       
 
+        missing = []
+        if not rbw: missing.append("RBW")
+        if not carpool: missing.append("Carpool")
+        if mode == "quarterly":
+            if not rad: missing.append("RAD")
+            if not afv: missing.append("AFV")
+        if missing:
+            messagebox.showerror("Missing files", f"Please select files for: {', '.join(missing)}")
+            return None
+
         quarter = None
         year = None
         if mode == "quarterly":
@@ -443,6 +453,7 @@ class TRPApp:
                     os.path.join(out_used, "cleaned_master.csv"),
                     os.path.join(out_used, "lunch_report.csv"),
                     os.path.join(out_used, "winner_report.csv"),
+                    os.path.join(out_used, "lunch_checkoff.pdf"),
                     os.path.join(out_used, "run_log.json"),
                 ]
                 missing = [p for p in expected if not os.path.exists(p)]

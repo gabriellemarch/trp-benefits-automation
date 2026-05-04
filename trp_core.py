@@ -47,6 +47,7 @@ EXPECTED_OUTPUT_FILES = [
     "cleaned_master.csv",
     "lunch_report.csv",
     "winner_report.csv",
+    "lunch_checkoff.pdf",
     "run_log.json",
 ]
 
@@ -62,27 +63,30 @@ def read_table(path: str) -> pd.DataFrame:
     if not p.exists():
         raise FileNotFoundError(f"File not found: {path}")
 
-    def _read_csv_with_fallbacks(csv_path: str) -> pd.DataFrame:
-        # Vendors occasionally export CSVs in cp1252/latin-1 instead of utf-8.
-        encodings = ["utf-8", "utf-8-sig", "cp1252", "latin-1"]
-        last_error = None
-        for enc in encodings:
-            try:
-                return pd.read_csv(csv_path, encoding=enc)
-            except UnicodeDecodeError as exc:
-                last_error = exc
-        raise ValueError(
-            f"Could not decode CSV '{csv_path}' with supported encodings {encodings}. Last error: {last_error}"
-        )
-
-
     ext = p.suffix.lower()
     if ext in [".csv"]:
-        return _read_csv_with_fallbacks(path)
+        return read_csv_with_fallback_encoding(path)
     if ext in [".xlsx", ".xls"]:
         return pd.read_excel(path)
-     # fallback: try as csv
-    return _read_csv_with_fallbacks(path)
+    # fallback: try csv
+    return read_csv_with_fallback_encoding(path)
+
+def read_csv_with_fallback_encoding(path: str) -> pd.DataFrame:
+    encodings = ["utf-8", "utf-8-sig", "cp1252", "latin1"]
+    errors = []
+    for encoding in encodings:
+        try:
+            return pd.read_csv(path, encoding=encoding)
+        except UnicodeDecodeError as exc:
+            errors.append(f"{encoding}: {exc}")
+    raise UnicodeDecodeError(
+        "csv",
+        b"",
+        0,
+        1,
+        "Could not decode CSV with utf-8, utf-8-sig, cp1252, or latin1. "
+        + " | ".join(errors),
+    )
 
 # ----------------------------
 # Helpers: cleaning
@@ -358,39 +362,58 @@ def lunches_from_trips(n: int) -> int:
         return 4
     return 5  # 20–31 => 5 (cap)
 
-def calculate_lunch_report(month_df: pd.DataFrame) -> pd.DataFrame:
-    df = month_df[month_df["program"].isin([PROGRAM_RBW, PROGRAM_CARPOOL])].copy()
-
-# Normalize participant keys + created date for a single combined RBW/CARPOOL pipeline.
-    df["name"] = df["name"].apply(smart_title)
-    df["badge_id"] = df["badge_id"].apply(clean_badge)
-    df["email"] = df["email"].apply(clean_email)
-    df["created_date"] = pd.to_datetime(df["created_date"], errors="coerce").dt.date
-
-    # Reported values are derived from raw submissions before trip dedupe, for audit checks.
-
+def rbw_carpool_with_trip_keys(period_df: pd.DataFrame) -> pd.DataFrame:
+    df = period_df[period_df["program"].isin([PROGRAM_RBW, PROGRAM_CARPOOL])].copy()
     df["name_key"] = df["name"].fillna("").astype(str).str.strip().str.lower()
     df["badge_key"] = df["badge_id"].fillna("").astype(str).str.strip().str.upper()
     df["email_key"] = df["email"].fillna("").astype(str).str.strip().str.lower()
-    df["trip_date"] = pd.to_datetime(df["created_date"], errors="coerce").dt.date
 
-    df["participant_key"] = df["badge_key"]
-    missing_badge = df["participant_key"].str.len() == 0
+    # Primary participant identity: name + badge, even if emails differ.
+    df["participant_key"] = df["name_key"] + "|" + df["badge_key"]
+
+    # If badge is missing, fallback to name + email so anonymous rows still count.
+    missing_badge = df["badge_key"].str.len() == 0
     df.loc[missing_badge, "participant_key"] = df.loc[missing_badge, "name_key"] + "|" + df.loc[missing_badge, "email_key"]
 
-    # Keep only rows we can identify.
     df = df[df["participant_key"].str.strip("|").str.len() > 0]
+    df["created_date"] = pd.to_datetime(df["created_date"], errors="coerce")
+    df = df.dropna(subset=["created_date"])
+    df["trip_date"] = df["created_date"].dt.date
+    return df
 
-   # RBW and CARPOOL entries are each capped at one trip per person per day.
-    # If someone logs multiple trips in either program on the same day,
-    # keep only the first row for that person/date/program.
-    rbw_carpool = (
-        df[df["program"].isin([PROGRAM_RBW, PROGRAM_CARPOOL])]
-        .sort_values(["program", "participant_key", "created_date"], ascending=[True, True, True])
-        .drop_duplicates(subset=["program", "participant_key", "trip_date"], keep="first")
+def audit_duplicate_daily_trips(period_df: pd.DataFrame) -> pd.DataFrame:
+    columns = ["trip_date", "name", "badge_id", "email", "entry_count", "programs", "created_dates"]
+    df = rbw_carpool_with_trip_keys(period_df)
+    if df.empty:
+        return pd.DataFrame(columns=columns)
+
+    duplicate_rows = (
+        df.groupby(["participant_key", "trip_date"], as_index=False)
+        .filter(lambda g: len(g) > 1)
     )
-    other_programs = df[~df["program"].isin([PROGRAM_RBW, PROGRAM_CARPOOL])]
-    df = pd.concat([other_programs, rbw_carpool], ignore_index=True)
+    if duplicate_rows.empty:
+        return pd.DataFrame(columns=columns)
+
+    audit = (
+        duplicate_rows
+        .sort_values(["participant_key", "trip_date", "created_date"])
+        .groupby(["participant_key", "trip_date"], as_index=False)
+        .agg(
+            name=("name", "first"),
+            badge_id=("badge_id", "first"),
+            email=("email", "first"),
+            entry_count=("participant_key", "size"),
+            programs=("program", lambda s: ", ".join(sorted(set(s.astype(str))))),
+            created_dates=("created_date", lambda s: ", ".join(x.strftime("%Y-%m-%d %H:%M:%S") for x in s.dropna())),
+        )
+    )
+    return audit[columns]
+
+def calculate_lunch_report(month_df: pd.DataFrame) -> pd.DataFrame:
+    df = rbw_carpool_with_trip_keys(month_df)
+    if df.empty:
+        return pd.DataFrame(columns=["name", "badge_id", "email", "trips", "lunches"])
+    df = df.sort_values(["participant_key", "trip_date", "created_date"])
 
     email_stats = (
         df[df["email_key"].str.len() > 0]
@@ -412,8 +435,9 @@ def calculate_lunch_report(month_df: pd.DataFrame) -> pd.DataFrame:
             [["participant_key", "email"]]
         )
 
+    daily_trips = df.drop_duplicates(subset=["participant_key", "trip_date"], keep="first")
     trip_counts = (
-        df.groupby(["participant_key"], as_index=False)
+        daily_trips.groupby(["participant_key"], as_index=False)
         .agg(
             trips=("participant_key", "size"),
             name=("name", "first"),
@@ -653,48 +677,188 @@ def write_lunch_checkoff_xlsx(
     wb.save(out_path)
     return out_path
 
-def export_lunch_checkoff_pdf(xlsx_path: str) -> Optional[str]:
-    """
-    Best-effort export of the lunch checklist workbook to PDF.
-    Returns the PDF path when successful, else None.
-    """
-    if win32com is None or not os.path.exists(xlsx_path):
-        return None
+def _pdf_escape(text: object) -> str:
+    value = _safe_str(text).replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    return value.encode("cp1252", errors="replace").decode("cp1252")
 
-    pdf_path = os.path.splitext(xlsx_path)[0] + ".pdf"
-    excel = None
-    wb = None
-    try:
-        excel = win32com.client.Dispatch("Excel.Application")
-        excel.Visible = False
-        excel.DisplayAlerts = False
-        wb = excel.Workbooks.Open(os.path.abspath(xlsx_path))
-        wb.ExportAsFixedFormat(0, os.path.abspath(pdf_path))  # 0 = PDF
-        return pdf_path if os.path.exists(pdf_path) else None
-    except Exception:
-        return None
-    finally:
-        try:
-            if wb is not None:
-                wb.Close(False)
-        except Exception:
-            pass
-        try:
-            if excel is not None:
-                excel.Quit()
-        except Exception:
-            pass
+def _pdf_text(x: float, y: float, text: object, size: int = 10, bold: bool = False) -> str:
+    font = "F2" if bold else "F1"
+    return f"BT /{font} {size} Tf {x:.2f} {y:.2f} Td ({_pdf_escape(text)}) Tj ET\n"
 
+def _pdf_centered_text(x: float, y: float, width: float, text: object, size: int = 10, bold: bool = False) -> str:
+    value = _pdf_escape(text)
+    approx_width = len(value) * size * 0.5
+    return _pdf_text(x + max((width - approx_width) / 2, 2), y, value, size=size, bold=bold)
+
+def _pdf_rect(x: float, y: float, width: float, height: float, fill: Optional[str] = None) -> str:
+    if fill == "gray":
+        return f"0.94 0.94 0.94 rg {x:.2f} {y:.2f} {width:.2f} {height:.2f} re f 0 0 0 rg\n"
+    if fill == "black":
+        return f"0 0 0 rg {x:.2f} {y:.2f} {width:.2f} {height:.2f} re f 0 0 0 rg\n"
+    return f"{x:.2f} {y:.2f} {width:.2f} {height:.2f} re S\n"
+
+def _write_simple_pdf(path: str, page_streams: List[str], width: int = 792, height: int = 612) -> None:
+    objects: List[bytes] = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>",
+    ]
+
+    page_object_ids = []
+    for stream in page_streams:
+        page_id = len(objects) + 1
+        content_id = page_id + 1
+        page_object_ids.append(page_id)
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] "
+            f"/Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents {content_id} 0 R >>"
+            .encode("ascii")
+        )
+        stream_bytes = stream.encode("cp1252", errors="replace")
+        objects.append(
+            b"<< /Length " + str(len(stream_bytes)).encode("ascii") + b" >>\nstream\n"
+            + stream_bytes
+            + b"\nendstream"
+        )
+
+    kids = " ".join(f"{obj_id} 0 R" for obj_id in page_object_ids)
+    objects[1] = f"<< /Type /Pages /Kids [{kids}] /Count {len(page_object_ids)} >>".encode("ascii")
+
+    pdf = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for obj_id, obj in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf.extend(f"{obj_id} 0 obj\n".encode("ascii"))
+        pdf.extend(obj)
+        pdf.extend(b"\nendobj\n")
+
+    xref_pos = len(pdf)
+    pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    pdf.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    pdf.extend(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n"
+        .encode("ascii")
+    )
+
+    with open(path, "wb") as f:
+        f.write(pdf)
+
+def write_lunch_checkoff_pdf(
+    outdir: str,
+    lunch_report: pd.DataFrame,
+    period_year: int,
+    period_month: int,
+    site_name: str = "Chandler",
+    filename: str = "lunch_checkoff.pdf",
+) -> str:
+    """
+    Creates a printable PDF checkoff sheet:
+    Name | # Lunches | 1 | 2 | 3 | 4 | 5
+    Slots above allowed lunches are blacked out.
+    """
+    os.makedirs(outdir, exist_ok=True)
+
+    if not {"name", "lunches"}.issubset(set(lunch_report.columns)):
+        raise ValueError("lunch_report must contain columns: 'name' and 'lunches'")
+
+    ey, em = _add_month(period_year, period_month, delta=1)
+    expire_str = _last_day_of_month(ey, em).strftime("%m/%d/%Y")
+    month_name = calendar.month_name[period_month]
+
+    df = lunch_report.copy()
+    df["lunches"] = pd.to_numeric(df["lunches"], errors="coerce").fillna(0).astype(int)
+    df = df.sort_values(["name"], ascending=True).reset_index(drop=True)
+
+    page_width = 792
+    page_height = 612
+    margin = 36
+    row_h = 23
+    name_w = 360
+    count_w = 72
+    slot_w = 44
+    table_w = name_w + count_w + (slot_w * 5)
+    start_x = margin
+    start_y = page_height - 132
+    rows_per_page = int((start_y - margin) // row_h)
+    pages: List[str] = []
+
+    if df.empty:
+        chunks = [df]
+    else:
+        chunks = [df.iloc[i:i + rows_per_page] for i in range(0, len(df), rows_per_page)]
+
+    for page_num, chunk in enumerate(chunks, start=1):
+        s = "0 0 0 RG 0 0 0 rg 0.8 w\n"
+        s += _pdf_text(margin, page_height - 48, site_name, size=16, bold=True)
+        s += _pdf_text(margin, page_height - 70, f"{month_name} TRP lunches", size=11, bold=True)
+        s += _pdf_text(page_width - margin - 220, page_height - 70, f"ALL LUNCHES EXPIRE ON {expire_str}", size=10, bold=True)
+        if len(chunks) > 1:
+            s += _pdf_text(page_width - margin - 60, page_height - 94, f"Page {page_num}", size=9)
+
+        header_y = start_y
+        s += _pdf_rect(start_x, header_y, table_w, row_h, fill="gray")
+        s += _pdf_rect(start_x, header_y, table_w, row_h)
+        s += _pdf_text(start_x + 6, header_y + 7, "Name", size=10, bold=True)
+        s += _pdf_centered_text(start_x + name_w, header_y + 7, count_w, "# Lunches", size=10, bold=True)
+        for slot in range(1, 6):
+            x = start_x + name_w + count_w + ((slot - 1) * slot_w)
+            s += _pdf_centered_text(x, header_y + 7, slot_w, str(slot), size=10, bold=True)
+
+        col_xs = [
+            start_x,
+            start_x + name_w,
+            start_x + name_w + count_w,
+            start_x + name_w + count_w + slot_w,
+            start_x + name_w + count_w + (slot_w * 2),
+            start_x + name_w + count_w + (slot_w * 3),
+            start_x + name_w + count_w + (slot_w * 4),
+        ]
+
+        for row_idx, (_, row) in enumerate(chunk.iterrows(), start=1):
+            y = header_y - (row_idx * row_h)
+            name = str(row["name"]).strip()
+            if len(name) > 48:
+                name = name[:45] + "..."
+            lunches = max(0, min(int(row["lunches"]), 5))
+
+            s += _pdf_rect(start_x, y, table_w, row_h)
+            for x in col_xs[1:]:
+                s += f"{x:.2f} {y:.2f} m {x:.2f} {y + row_h:.2f} l S\n"
+            s += _pdf_text(start_x + 6, y + 7, name, size=10)
+            s += _pdf_centered_text(start_x + name_w, y + 7, count_w, lunches, size=10)
+
+            for slot in range(1, 6):
+                x = start_x + name_w + count_w + ((slot - 1) * slot_w)
+                if slot > lunches:
+                    s += _pdf_rect(x + 1, y + 1, slot_w - 2, row_h - 2, fill="black")
+
+        pages.append(s)
+
+    out_path = os.path.join(outdir, filename)
+    _write_simple_pdf(out_path, pages, width=page_width, height=page_height)
+    return out_path
 
 def ensure_outputs_dir(outdir: str) -> None:
     os.makedirs(outdir, exist_ok=True)
 
-def write_outputs(outdir: str, cleaned_master: pd.DataFrame, lunch_report: pd.DataFrame, winners_report: pd.DataFrame, run_log: Dict) -> None:
+def write_outputs(
+    outdir: str,
+    cleaned_master: pd.DataFrame,
+    lunch_report: pd.DataFrame,
+    winners_report: pd.DataFrame,
+    run_log: Dict,
+    duplicate_daily_trips: Optional[pd.DataFrame] = None,
+) -> None:
     ensure_outputs_dir(outdir)
 
     cleaned_master.to_csv(os.path.join(outdir, "cleaned_master.csv"), index=False)
     lunch_report.to_csv(os.path.join(outdir, "lunch_report.csv"), index=False)
     winners_report.to_csv(os.path.join(outdir, "winner_report.csv"), index=False)
+    if duplicate_daily_trips is not None:
+        duplicate_daily_trips.to_csv(os.path.join(outdir, "duplicate_daily_trips.csv"), index=False)
 
     with open(os.path.join(outdir, "run_log.json"), "w", encoding="utf-8") as f:
         json.dump(run_log, f, indent=2, default=str)

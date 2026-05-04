@@ -49,22 +49,17 @@ def run_trp(
     rbw = core.load_rbw(rbw_path)
     carpool = core.load_carpool(carpool_path)
     if mode == "quarterly":
+        if not rad_path or not afv_path:
+            raise ValueError("Quarterly mode requires RAD and AFV files.")
         rad = core.load_rad(rad_path)
         afv = core.load_afv(afv_path)
     else:
-        empty_cols = {
-            "name_raw": pd.Series(dtype="string"),
-            "badge_raw": pd.Series(dtype="string"),
-            "email_raw": pd.Series(dtype="string"),
-            "created_raw": pd.Series(dtype="string"),
-            "created_date": pd.Series(dtype="datetime64[ns]"),
-            "program": pd.Series(dtype="string"),
-        }
-        rad = pd.DataFrame(empty_cols)
-        afv = pd.DataFrame(empty_cols)
+        rad = pd.DataFrame()
+        afv = pd.DataFrame()
 
     status("Cleaning + merging datasets...")
-    master_raw = pd.concat([rbw, carpool, rad, afv], ignore_index=True)
+    inputs = [df for df in [rbw, carpool, rad, afv] if not df.empty]
+    master_raw = pd.concat(inputs, ignore_index=True)
     master = core.standardize(master_raw)
 
     run_dt = datetime.now()
@@ -83,6 +78,7 @@ def run_trp(
 
     winners_all = []
     exclude_keys = set()
+    duplicate_daily_trips = pd.DataFrame()
 
     report_year: int
     report_month: int
@@ -112,6 +108,16 @@ def run_trp(
         run_log["random_seed"] = seed
 
         status(f"Calculating lunches for {y}-{m:02d}...")
+        duplicate_daily_trips = core.audit_duplicate_daily_trips(month_df)
+        run_log["duplicate_daily_trip_audit"] = {
+            "rule": "RBW/CARPOOL count at most one trip per participant per calendar date",
+            "duplicate_participant_dates": int(len(duplicate_daily_trips)),
+            "duplicate_entries_over_limit": int(
+                duplicate_daily_trips["entry_count"].sub(1).sum()
+                if not duplicate_daily_trips.empty else 0
+            ),
+            "output_file": "duplicate_daily_trips.csv",
+        }
         lunch_report = core.calculate_lunch_report(month_df)
         report_year, report_month = y, m
 
@@ -147,6 +153,16 @@ def run_trp(
         run_log["random_seed"] = seed
 
         status(f"Calculating lunches for {my}-{mm:02d} (most recent month in quarter)...")
+        duplicate_daily_trips = core.audit_duplicate_daily_trips(month_df)
+        run_log["duplicate_daily_trip_audit"] = {
+            "rule": "RBW/CARPOOL count at most one trip per participant per calendar date",
+            "duplicate_participant_dates": int(len(duplicate_daily_trips)),
+            "duplicate_entries_over_limit": int(
+                duplicate_daily_trips["entry_count"].sub(1).sum()
+                if not duplicate_daily_trips.empty else 0
+            ),
+            "output_file": "duplicate_daily_trips.csv",
+        }
         lunch_report = core.calculate_lunch_report(month_df)
         report_year, report_month = my, mm
 
@@ -166,17 +182,17 @@ def run_trp(
     winners_report = winners.drop(columns=["key"], errors="ignore")
 
     status("Writing outputs...")
-    core.write_outputs(outdir, master, lunch_report, winners_report, run_log)
+    core.write_outputs(outdir, master, lunch_report, winners_report, run_log, duplicate_daily_trips)
     
-    lunch_checklist_path = core.write_lunch_checkoff_xlsx(
+    lunch_checklist_path = core.write_lunch_checkoff_pdf(
         outdir=outdir,
         lunch_report=lunch_report,
         period_year=report_year,
         period_month=report_month,
         site_name="Chandler",
-        filename="lunch_checkoff.xlsx",
+        filename="lunch_checkoff.pdf",
     )
-    lunch_checklist_pdf_path = core.export_lunch_checkoff_pdf(lunch_checklist_path)
+
 
     should_create_email_drafts = bool(create_email_drafts) or mode == "quarterly"
     if should_create_email_drafts:
@@ -184,7 +200,7 @@ def run_trp(
         draft_counts = core.create_outlook_drafts(
             lunch_report=lunch_report,
             winners_report=winners_report,
-            lunch_checklist_path=lunch_checklist_pdf_path or lunch_checklist_path,
+            lunch_checklist_path=lunch_checklist_path,
             include_lunch_email=(mode != "quarterly"),
         )
         run_log["outlook_drafts"] = {
@@ -193,14 +209,14 @@ def run_trp(
             "forced_for_quarterly": mode == "quarterly",
             **draft_counts,
         }
-        core.write_outputs(outdir, master, lunch_report, winners_report, run_log)
+        core.write_outputs(outdir, master, lunch_report, winners_report, run_log, duplicate_daily_trips)
     else:
         run_log["outlook_drafts"] = {
             "enabled": False,
             "requested": bool(create_email_drafts),
             "forced_for_quarterly": False,
         }
-        core.write_outputs(outdir, master, lunch_report, winners_report, run_log)
+        core.write_outputs(outdir, master, lunch_report, winners_report, run_log, duplicate_daily_trips)
         
 
     # sanity check
