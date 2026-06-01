@@ -48,6 +48,7 @@ EXPECTED_OUTPUT_FILES = [
     "lunch_report.csv",
     "winner_report.csv",
     "lunch_checkoff.pdf",
+    "normalization_validation_report.csv",
     "run_log.json",
 ]
 
@@ -103,9 +104,7 @@ def clean_email(email: str) -> str:
     return email
 
 def clean_badge(badge: str) -> str:
-    badge = _safe_str(badge).strip().upper()
-    badge = re.sub(r"[^A-Z0-9]", "", badge)
-    return badge
+    return _safe_str(badge).strip().upper()
 
 def smart_title(name: str) -> str:
     """
@@ -128,6 +127,12 @@ def parse_datetime(series: pd.Series) -> pd.Series:
     Robust datetime parsing. Coerces invalid to NaT.
     """
     return pd.to_datetime(series, errors="coerce")
+
+def parse_date_only(series: pd.Series) -> pd.Series:
+    """
+    Robust date parsing. Coerces invalid values to NaT and drops the time component.
+    """
+    return pd.to_datetime(series, errors="coerce").dt.normalize()
 
 def get_first_column(df: pd.DataFrame, candidates: List[str]) -> pd.Series:
     """
@@ -225,6 +230,7 @@ def standardize(master: pd.DataFrame) -> pd.DataFrame:
     master["name"] = master["name_raw"].apply(smart_title)
     master["badge_id"] = master["badge_raw"].apply(clean_badge)
     master["email"] = master["email_raw"].apply(clean_email)
+    master["created_date"] = parse_date_only(master["created_date"])
 
     master["has_badge"] = master["badge_id"].astype(str).str.len() > 0
     master["has_email"] = master["email"].astype(str).str.contains("@", na=False)
@@ -243,6 +249,104 @@ def standardize(master: pd.DataFrame) -> pd.DataFrame:
         "name_raw", "badge_raw", "email_raw", "created_raw",
     ]
     return master[cols]
+
+def _trip_identity_mask(df: pd.DataFrame) -> pd.Series:
+    return (
+        df["program"].isin([PROGRAM_RBW, PROGRAM_CARPOOL])
+        & df["badge_id"].fillna("").astype(str).str.len().gt(0)
+        & df["created_date"].notna()
+    )
+
+def _removed_duplicate_rows(df: pd.DataFrame, subset: List[str]) -> pd.DataFrame:
+    eligible = _trip_identity_mask(df)
+    duplicate_mask = eligible & df.duplicated(subset=subset, keep="first")
+    return df.loc[duplicate_mask].copy()
+
+def _dedupe_trip_rows(df: pd.DataFrame, subset: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    removed = _removed_duplicate_rows(df, subset)
+    if removed.empty:
+        return df.reset_index(drop=True), removed
+    kept = df.drop(index=removed.index).reset_index(drop=True)
+    return kept, removed.reset_index(drop=True)
+
+def _removed_rows_validation(section: str, removed: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "section", "program", "badge_id", "created_date", "name", "email",
+        "name_raw", "badge_raw", "created_raw",
+    ]
+    if removed.empty:
+        return pd.DataFrame(columns=columns)
+    out = removed.copy()
+    out["section"] = section
+    out["created_date"] = pd.to_datetime(out["created_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    return out.reindex(columns=columns)
+
+def _identity_variants_validation(df: pd.DataFrame, raw_col: str, section: str, output_col: str) -> pd.DataFrame:
+    columns = ["section", "programs", "badge_id", "variant_count", output_col]
+    x = df[_trip_identity_mask(df)].copy()
+    if x.empty:
+        return pd.DataFrame(columns=columns)
+    x["_raw_variant"] = x[raw_col].apply(_safe_str).str.strip()
+    x = x[x["_raw_variant"].str.len() > 0]
+    if x.empty:
+        return pd.DataFrame(columns=columns)
+
+    grouped = (
+        x.groupby(["badge_id"], as_index=False)
+        .agg(
+            programs=("program", lambda s: ", ".join(sorted(set(s.astype(str))))),
+            variant_count=("_raw_variant", lambda s: len(set(s))),
+            **{output_col: ("_raw_variant", lambda s: " | ".join(sorted(set(s))))},
+        )
+    )
+    grouped = grouped[grouped["variant_count"] > 1]
+    if grouped.empty:
+        return pd.DataFrame(columns=columns)
+    grouped["section"] = section
+    return grouped.reindex(columns=columns)
+
+def normalize_and_dedupe_trip_sources(
+    rbw_raw: pd.DataFrame,
+    carpool_raw: pd.DataFrame,
+) -> Tuple[pd.DataFrame, pd.DataFrame, Dict]:
+    """
+    Apply the same RBW/CARPOOL normalization before combining, remove same-day
+    duplicates within each source, then remove cross-source same-day duplicates.
+    Employee identity for these steps is normalized badge ID + created date.
+    """
+    rbw_normalized = standardize(rbw_raw)
+    carpool_normalized = standardize(carpool_raw)
+    pre_dedupe = pd.concat([rbw_normalized, carpool_normalized], ignore_index=True)
+
+    rbw_deduped, rbw_removed = _dedupe_trip_rows(rbw_normalized, ["badge_id", "created_date"])
+    carpool_deduped, carpool_removed = _dedupe_trip_rows(carpool_normalized, ["badge_id", "created_date"])
+
+    combined = pd.concat([rbw_deduped, carpool_deduped], ignore_index=True)
+    combined_deduped, combined_removed = _dedupe_trip_rows(combined, ["badge_id", "created_date"])
+
+    validation_parts = [
+        _removed_rows_validation("within_carpool_removed", carpool_removed),
+        _removed_rows_validation("within_rbw_removed", rbw_removed),
+        _removed_rows_validation("combined_removed", combined_removed),
+        _identity_variants_validation(pre_dedupe, "name_raw", "multiple_raw_names_same_badge", "raw_names"),
+        _identity_variants_validation(pre_dedupe, "badge_raw", "multiple_raw_badge_formats_same_badge", "raw_badge_formats"),
+    ]
+    validation_report = pd.concat(validation_parts, ignore_index=True, sort=False).fillna("")
+    summary = {
+        "within_carpool_removed": int(len(carpool_removed)),
+        "within_rbw_removed": int(len(rbw_removed)),
+        "combined_removed": int(len(combined_removed)),
+        "multiple_raw_names_same_badge": int(
+            (validation_report["section"] == "multiple_raw_names_same_badge").sum()
+            if not validation_report.empty else 0
+        ),
+        "multiple_raw_badge_formats_same_badge": int(
+            (validation_report["section"] == "multiple_raw_badge_formats_same_badge").sum()
+            if not validation_report.empty else 0
+        ),
+        "output_file": "normalization_validation_report.csv",
+    }
+    return combined_deduped, validation_report, summary
 
 # ----------------------------
 # Reporting period logic
@@ -368,10 +472,10 @@ def rbw_carpool_with_trip_keys(period_df: pd.DataFrame) -> pd.DataFrame:
     df["badge_key"] = df["badge_id"].fillna("").astype(str).str.strip().str.upper()
     df["email_key"] = df["email"].fillna("").astype(str).str.strip().str.lower()
 
-    # Primary participant identity: name + badge, even if emails differ.
-    df["participant_key"] = df["name_key"] + "|" + df["badge_key"]
+    # Primary participant identity is normalized badge ID. Name is display-only.
+    df["participant_key"] = df["badge_key"]
 
-    # If badge is missing, fallback to name + email so anonymous rows still count.
+    # If badge is missing, fallback so anonymous rows can still appear in reports.
     missing_badge = df["badge_key"].str.len() == 0
     df.loc[missing_badge, "participant_key"] = df.loc[missing_badge, "name_key"] + "|" + df.loc[missing_badge, "email_key"]
 
@@ -851,6 +955,7 @@ def write_outputs(
     winners_report: pd.DataFrame,
     run_log: Dict,
     duplicate_daily_trips: Optional[pd.DataFrame] = None,
+    normalization_validation_report: Optional[pd.DataFrame] = None,
 ) -> None:
     ensure_outputs_dir(outdir)
 
@@ -859,6 +964,8 @@ def write_outputs(
     winners_report.to_csv(os.path.join(outdir, "winner_report.csv"), index=False)
     if duplicate_daily_trips is not None:
         duplicate_daily_trips.to_csv(os.path.join(outdir, "duplicate_daily_trips.csv"), index=False)
+    if normalization_validation_report is not None:
+        normalization_validation_report.to_csv(os.path.join(outdir, "normalization_validation_report.csv"), index=False)
 
     with open(os.path.join(outdir, "run_log.json"), "w", encoding="utf-8") as f:
         json.dump(run_log, f, indent=2, default=str)

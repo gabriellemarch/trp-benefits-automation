@@ -57,10 +57,17 @@ def run_trp(
         rad = pd.DataFrame()
         afv = pd.DataFrame()
 
+    status("Normalizing RBW/Carpool and removing same-day duplicates...")
+    trip_master, normalization_validation_report, normalization_summary = core.normalize_and_dedupe_trip_sources(
+        rbw,
+        carpool,
+    )
+
     status("Cleaning + merging datasets...")
-    inputs = [df for df in [rbw, carpool, rad, afv] if not df.empty]
-    master_raw = pd.concat(inputs, ignore_index=True)
-    master = core.standardize(master_raw)
+    standardized_rad = core.standardize(rad) if not rad.empty else pd.DataFrame()
+    standardized_afv = core.standardize(afv) if not afv.empty else pd.DataFrame()
+    inputs = [df for df in [trip_master, standardized_rad, standardized_afv] if not df.empty]
+    master = pd.concat(inputs, ignore_index=True)
 
     run_dt = datetime.now()
 
@@ -74,6 +81,7 @@ def run_trp(
             "afv": afv_path,
         },
         "record_counts": master["program"].value_counts().to_dict(),
+        "normalization_validation": normalization_summary,
     }
 
     winners_all = []
@@ -182,7 +190,15 @@ def run_trp(
     winners_report = winners.drop(columns=["key"], errors="ignore")
 
     status("Writing outputs...")
-    core.write_outputs(outdir, master, lunch_report, winners_report, run_log, duplicate_daily_trips)
+    core.write_outputs(
+        outdir,
+        master,
+        lunch_report,
+        winners_report,
+        run_log,
+        duplicate_daily_trips,
+        normalization_validation_report,
+    )
     
     lunch_checklist_path = core.write_lunch_checkoff_pdf(
         outdir=outdir,
@@ -209,14 +225,30 @@ def run_trp(
             "forced_for_quarterly": mode == "quarterly",
             **draft_counts,
         }
-        core.write_outputs(outdir, master, lunch_report, winners_report, run_log, duplicate_daily_trips)
+        core.write_outputs(
+            outdir,
+            master,
+            lunch_report,
+            winners_report,
+            run_log,
+            duplicate_daily_trips,
+            normalization_validation_report,
+        )
     else:
         run_log["outlook_drafts"] = {
             "enabled": False,
             "requested": bool(create_email_drafts),
             "forced_for_quarterly": False,
         }
-        core.write_outputs(outdir, master, lunch_report, winners_report, run_log, duplicate_daily_trips)
+        core.write_outputs(
+            outdir,
+            master,
+            lunch_report,
+            winners_report,
+            run_log,
+            duplicate_daily_trips,
+            normalization_validation_report,
+        )
         
 
     # sanity check
