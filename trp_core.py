@@ -262,9 +262,22 @@ def standardize(master: pd.DataFrame) -> pd.DataFrame:
 def _trip_identity_mask(df: pd.DataFrame) -> pd.Series:
     return (
         df["program"].isin([PROGRAM_RBW, PROGRAM_CARPOOL])
-        & df["badge_id"].fillna("").astype(str).str.len().gt(0)
+        & (
+            df["email"].fillna("").astype(str).str.len().gt(0)
+            | df["name"].fillna("").astype(str).str.len().gt(0)
+        )
         & df["created_date"].notna()
     )
+
+
+def _add_form_identity_key(df: pd.DataFrame) -> pd.DataFrame:
+    """Use the Form-provided email as identity, with name as a fallback."""
+    out = df.copy()
+    email_key = out["email"].fillna("").astype(str).str.strip().str.casefold()
+    name_key = out["name"].fillna("").astype(str).str.strip().str.casefold()
+    out["participant_key"] = email_key
+    out.loc[email_key.str.len() == 0, "participant_key"] = name_key
+    return out
 
 def _removed_duplicate_rows(df: pd.DataFrame, subset: List[str]) -> pd.DataFrame:
     eligible = _trip_identity_mask(df)
@@ -321,24 +334,23 @@ def normalize_and_dedupe_trip_sources(
     """
     Apply the same RBW/CARPOOL normalization before combining, remove same-day
     duplicates within each source, then remove cross-source same-day duplicates.
-    Employee identity for these steps is normalized badge ID + created date.
+    Employee identity for these steps is the Form-provided email + created date,
+    with the Form-provided name used only when email is unavailable.
     """
-    rbw_normalized = standardize(rbw_raw)
-    carpool_normalized = standardize(carpool_raw)
+    rbw_normalized = _add_form_identity_key(standardize(rbw_raw))
+    carpool_normalized = _add_form_identity_key(standardize(carpool_raw))
     pre_dedupe = pd.concat([rbw_normalized, carpool_normalized], ignore_index=True)
 
-    rbw_deduped, rbw_removed = _dedupe_trip_rows(rbw_normalized, ["badge_id", "created_date"])
-    carpool_deduped, carpool_removed = _dedupe_trip_rows(carpool_normalized, ["badge_id", "created_date"])
+    rbw_deduped, rbw_removed = _dedupe_trip_rows(rbw_normalized, ["participant_key", "created_date"])
+    carpool_deduped, carpool_removed = _dedupe_trip_rows(carpool_normalized, ["participant_key", "created_date"])
 
     combined = pd.concat([rbw_deduped, carpool_deduped], ignore_index=True)
-    combined_deduped, combined_removed = _dedupe_trip_rows(combined, ["badge_id", "created_date"])
+    combined_deduped, combined_removed = _dedupe_trip_rows(combined, ["participant_key", "created_date"])
 
     validation_parts = [
         _removed_rows_validation("within_carpool_removed", carpool_removed),
         _removed_rows_validation("within_rbw_removed", rbw_removed),
         _removed_rows_validation("combined_removed", combined_removed),
-        _identity_variants_validation(pre_dedupe, "name_raw", "multiple_raw_names_same_badge", "raw_names"),
-        _identity_variants_validation(pre_dedupe, "badge_raw", "multiple_raw_badge_formats_same_badge", "raw_badge_formats"),
     ]
     validation_report = pd.concat(validation_parts, ignore_index=True, sort=False).fillna("")
     summary = {
@@ -478,17 +490,15 @@ def lunches_from_trips(n: int) -> int:
 def rbw_carpool_with_trip_keys(period_df: pd.DataFrame) -> pd.DataFrame:
     df = period_df[period_df["program"].isin([PROGRAM_RBW, PROGRAM_CARPOOL])].copy()
     df["name_key"] = df["name"].fillna("").astype(str).str.strip().str.lower()
-    df["badge_key"] = df["badge_id"].fillna("").astype(str).str.strip().str.upper()
     df["email_key"] = df["email"].fillna("").astype(str).str.strip().str.lower()
 
-    # Primary participant identity is normalized badge ID. Name is display-only.
-    df["participant_key"] = df["badge_key"]
+    # Microsoft Forms supplies email and name automatically; badge ID is not used
+    # to identify or deduplicate trip participants.
+    df["participant_key"] = df["email_key"]
+    missing_email = df["email_key"].str.len() == 0
+    df.loc[missing_email, "participant_key"] = df.loc[missing_email, "name_key"]
 
-    # If badge is missing, fallback so anonymous rows can still appear in reports.
-    missing_badge = df["badge_key"].str.len() == 0
-    df.loc[missing_badge, "participant_key"] = df.loc[missing_badge, "name_key"] + "|" + df.loc[missing_badge, "email_key"]
-
-    df = df[df["participant_key"].str.strip("|").str.len() > 0]
+    df = df[df["participant_key"].str.len() > 0]
     df["created_date"] = pd.to_datetime(df["created_date"], errors="coerce")
     df = df.dropna(subset=["created_date"])
     df["trip_date"] = df["created_date"].dt.date
@@ -582,8 +592,9 @@ def calculate_lunch_report(month_df: pd.DataFrame) -> pd.DataFrame:
 
 def unique_pool(df: pd.DataFrame) -> pd.DataFrame:
     x = df.copy()
-    x["key"] = x["badge_id"]
-    x.loc[x["key"].astype(str).str.len() == 0, "key"] = x["email"]
+    x["key"] = x["email"].fillna("").astype(str).str.strip().str.casefold()
+    missing_email = x["key"].str.len() == 0
+    x.loc[missing_email, "key"] = x.loc[missing_email, "name"].fillna("").astype(str).str.strip().str.casefold()
     x = x[x["key"].astype(str).str.len() > 0]
     x = x.drop_duplicates(subset=["key"]).reset_index(drop=True)
     return x
