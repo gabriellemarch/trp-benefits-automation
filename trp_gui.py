@@ -66,8 +66,27 @@ except Exception as _imp_err:
     IMPORT_ERROR_TEXT = str(_imp_err)
 
 FISCAL_QUARTERS = ["Q1", "Q2", "Q3", "Q4"]  # Q1: Apr–Jun, Q2: Jul–Sep, Q3: Oct–Dec, Q4: Jan–Mar
-DAILY_REGISTRATION_PATH = r"C:\Users\C79084\OneDrive - Microchip Technology Inc\TRP Daily Registration.xlsx"
 AFV_ROSTER_PATH = r"X:\Trip Reduction\AFV\AFV_Current.xlsx"
+
+
+def _resolve_daily_registration_path() -> str:
+    """Find the shared Forms workbook for either collaborator's OneDrive layout."""
+    onedrive_root = Path.home() / "OneDrive - Microchip Technology Inc"
+    shared_folders = [
+        onedrive_root / "Rylee&Gabby",
+        onedrive_root / "Gabrielle March - C79084's files - Rylee&Gabby",
+    ]
+    expected_name = "new trp daily registration.xlsx"
+
+    for folder in shared_folders:
+        if not folder.is_dir():
+            continue
+        for workbook in folder.glob("*.xlsx"):
+            normalized_name = workbook.name.replace("\xa0", " ").strip().casefold()
+            if normalized_name == expected_name:
+                return str(workbook)
+
+    return str(shared_folders[0] / "New TRP Daily Registration.xlsx")
 
 
 def _current_fiscal_quarter(now: datetime) -> str:
@@ -132,9 +151,10 @@ class TRPApp:
         self.root.resizable(True, True)
 
         # State
-        self.rbw_path = tk.StringVar(value=DAILY_REGISTRATION_PATH)
-        self.carpool_path = tk.StringVar(value=DAILY_REGISTRATION_PATH)
-        self.rad_path = tk.StringVar(value=DAILY_REGISTRATION_PATH)
+        daily_registration_path = _resolve_daily_registration_path()
+        self.rbw_path = tk.StringVar(value=daily_registration_path)
+        self.carpool_path = tk.StringVar(value=daily_registration_path)
+        self.rad_path = tk.StringVar(value=daily_registration_path)
         self.afv_path = tk.StringVar(value=AFV_ROSTER_PATH)
 
         self.outdir = tk.StringVar(value=str(Path.cwd() / "outputs"))
