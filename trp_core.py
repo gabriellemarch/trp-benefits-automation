@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -104,7 +105,21 @@ def clean_email(email: str) -> str:
     return email
 
 def clean_badge(badge: str) -> str:
-    return _safe_str(badge).strip().upper()
+    value = re.sub(r"\s+", "", _safe_str(badge)).upper()
+    if not value:
+        return ""
+
+    # Excel commonly turns numeric badge IDs into values such as 123456.0 or
+    # scientific notation. Normalize those without padding/truncating: badges
+    # are identifiers and may contain more than five digits.
+    if re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:E[+-]?\d+)?", value):
+        try:
+            numeric = Decimal(value)
+            if numeric == numeric.to_integral_value():
+                return format(numeric, "f").split(".", 1)[0]
+        except InvalidOperation:
+            pass
+    return value
 
 def smart_title(name: str) -> str:
     """
@@ -160,7 +175,7 @@ def load_rbw(path: str) -> pd.DataFrame:
         df = df[registration_type.astype(str).str.strip().str.casefold().eq("run bike walk")].copy()
     out = pd.DataFrame({
         "name_raw": df.get("Name"),
-        "badge_raw": df.get("Badge ID Number"),
+        "badge_raw": get_first_column(df, ["Badge ID Number", "Badge Number", "Badge #", "Badge"]),
         "email_raw": df.get("Email"),
         "created_raw": get_first_column(df, ["Created", "Completion time", "Start time"]),
     })
@@ -175,7 +190,7 @@ def load_carpool(path: str) -> pd.DataFrame:
         df = df[registration_type.astype(str).str.strip().str.casefold().eq("carpool")].copy()
     out = pd.DataFrame({
         "name_raw": df.get("Name"),
-        "badge_raw": df.get("Badge ID Number"),
+        "badge_raw": get_first_column(df, ["Badge ID Number", "Badge Number", "Badge #", "Badge"]),
         "email_raw": df.get("Email"),
         "created_raw": get_first_column(df, ["Created", "Completion time", "Start time"]),
     })
@@ -190,7 +205,7 @@ def load_rad(path: str) -> pd.DataFrame:
         df = df[registration_type.astype(str).str.strip().str.casefold().eq("refuel after dark")].copy()
     out = pd.DataFrame({
         "name_raw": df.get("Name"),
-        "badge_raw": df.get("Badge ID Number"),
+        "badge_raw": get_first_column(df, ["Badge ID Number", "Badge Number", "Badge #", "Badge"]),
         "email_raw": get_first_column(df, ["Microchip Email", "Email"]),
         "created_raw": get_first_column(df, ["Refuel Date and Time", "Completion time", "Start time"]),
     })
@@ -263,7 +278,8 @@ def _trip_identity_mask(df: pd.DataFrame) -> pd.Series:
     return (
         df["program"].isin([PROGRAM_RBW, PROGRAM_CARPOOL])
         & (
-            df["email"].fillna("").astype(str).str.len().gt(0)
+            df["badge_id"].fillna("").astype(str).str.len().gt(0)
+            | df["email"].fillna("").astype(str).str.len().gt(0)
             | df["name"].fillna("").astype(str).str.len().gt(0)
         )
         & df["created_date"].notna()
@@ -271,12 +287,16 @@ def _trip_identity_mask(df: pd.DataFrame) -> pd.Series:
 
 
 def _add_form_identity_key(df: pd.DataFrame) -> pd.DataFrame:
-    """Use the Form-provided email as identity, with name as a fallback."""
+    """Use normalized badge identity, with Form email/name as fallbacks."""
     out = df.copy()
+    badge_key = out["badge_id"].fillna("").astype(str).str.strip().str.casefold()
     email_key = out["email"].fillna("").astype(str).str.strip().str.casefold()
     name_key = out["name"].fillna("").astype(str).str.strip().str.casefold()
-    out["participant_key"] = email_key
-    out.loc[email_key.str.len() == 0, "participant_key"] = name_key
+    out["participant_key"] = badge_key
+    missing_badge = badge_key.str.len() == 0
+    out.loc[missing_badge, "participant_key"] = email_key[missing_badge]
+    missing_badge_and_email = missing_badge & email_key.str.len().eq(0)
+    out.loc[missing_badge_and_email, "participant_key"] = name_key[missing_badge_and_email]
     return out
 
 def _removed_duplicate_rows(df: pd.DataFrame, subset: List[str]) -> pd.DataFrame:
@@ -334,8 +354,8 @@ def normalize_and_dedupe_trip_sources(
     """
     Apply the same RBW/CARPOOL normalization before combining, remove same-day
     duplicates within each source, then remove cross-source same-day duplicates.
-    Employee identity for these steps is the Form-provided email + created date,
-    with the Form-provided name used only when email is unavailable.
+    Employee identity for these steps is normalized badge ID + created date,
+    with Form-provided email and name used when badge ID is unavailable.
     """
     rbw_normalized = _add_form_identity_key(standardize(rbw_raw))
     carpool_normalized = _add_form_identity_key(standardize(carpool_raw))
@@ -491,12 +511,15 @@ def rbw_carpool_with_trip_keys(period_df: pd.DataFrame) -> pd.DataFrame:
     df = period_df[period_df["program"].isin([PROGRAM_RBW, PROGRAM_CARPOOL])].copy()
     df["name_key"] = df["name"].fillna("").astype(str).str.strip().str.lower()
     df["email_key"] = df["email"].fillna("").astype(str).str.strip().str.lower()
+    df["badge_key"] = df["badge_id"].apply(clean_badge).str.casefold()
 
-    # Microsoft Forms supplies email and name automatically; badge ID is not used
-    # to identify or deduplicate trip participants.
-    df["participant_key"] = df["email_key"]
-    missing_email = df["email_key"].str.len() == 0
-    df.loc[missing_email, "participant_key"] = df.loc[missing_email, "name_key"]
+    # Badge IDs also support manually collected data (such as July). Form email
+    # and name remain fallbacks for records where no badge was supplied.
+    df["participant_key"] = df["badge_key"]
+    missing_badge = df["badge_key"].str.len() == 0
+    df.loc[missing_badge, "participant_key"] = df.loc[missing_badge, "email_key"]
+    missing_badge_and_email = missing_badge & df["email_key"].str.len().eq(0)
+    df.loc[missing_badge_and_email, "participant_key"] = df.loc[missing_badge_and_email, "name_key"]
 
     df = df[df["participant_key"].str.len() > 0]
     df["created_date"] = pd.to_datetime(df["created_date"], errors="coerce")

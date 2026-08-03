@@ -58,6 +58,12 @@ def run_trp(
         afv = pd.DataFrame()
 
     status("Normalizing RBW/Carpool and removing same-day duplicates...")
+    # Keep a normalized copy before removal so the duplicate audit reports the
+    # rows that normalization subsequently excludes from trip/lunch totals.
+    trip_audit_master = pd.concat(
+        [core.standardize(rbw), core.standardize(carpool)],
+        ignore_index=True,
+    )
     trip_master, normalization_validation_report, normalization_summary = core.normalize_and_dedupe_trip_sources(
         rbw,
         carpool,
@@ -116,7 +122,7 @@ def run_trp(
         run_log["random_seed"] = seed
 
         status(f"Calculating lunches for {y}-{m:02d}...")
-        duplicate_daily_trips = core.audit_duplicate_daily_trips(month_df)
+        duplicate_daily_trips = core.audit_duplicate_daily_trips(core.filter_month(trip_audit_master, y, m))
         run_log["duplicate_daily_trip_audit"] = {
             "rule": "RBW/CARPOOL count at most one trip per participant per calendar date",
             "duplicate_participant_dates": int(len(duplicate_daily_trips)),
@@ -161,7 +167,7 @@ def run_trp(
         run_log["random_seed"] = seed
 
         status(f"Calculating lunches for {my}-{mm:02d} (most recent month in quarter)...")
-        duplicate_daily_trips = core.audit_duplicate_daily_trips(month_df)
+        duplicate_daily_trips = core.audit_duplicate_daily_trips(core.filter_month(trip_audit_master, my, mm))
         run_log["duplicate_daily_trip_audit"] = {
             "rule": "RBW/CARPOOL count at most one trip per participant per calendar date",
             "duplicate_participant_dates": int(len(duplicate_daily_trips)),
