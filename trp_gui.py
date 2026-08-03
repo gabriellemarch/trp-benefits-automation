@@ -66,6 +66,18 @@ except Exception as _imp_err:
     IMPORT_ERROR_TEXT = str(_imp_err)
 
 FISCAL_QUARTERS = ["Q1", "Q2", "Q3", "Q4"]  # Q1: Apr–Jun, Q2: Jul–Sep, Q3: Oct–Dec, Q4: Jan–Mar
+DAILY_REGISTRATION_PATH = r"C:\Users\C79084\OneDrive - Microchip Technology Inc\TRP Daily Registration.xlsx"
+AFV_ROSTER_PATH = r"X:\Trip Reduction\AFV\AFV_Current.xlsx"
+
+
+def _current_fiscal_quarter(now: datetime) -> str:
+    if now.month <= 3:
+        return "Q4"
+    if now.month <= 6:
+        return "Q1"
+    if now.month <= 9:
+        return "Q2"
+    return "Q3"
 
 
 @dataclass
@@ -120,18 +132,18 @@ class TRPApp:
         self.root.resizable(True, True)
 
         # State
-        self.rbw_path = tk.StringVar(value="")
-        self.carpool_path = tk.StringVar(value="")
-        self.rad_path = tk.StringVar(value="")
-        self.afv_path = tk.StringVar(value="")
+        self.rbw_path = tk.StringVar(value=DAILY_REGISTRATION_PATH)
+        self.carpool_path = tk.StringVar(value=DAILY_REGISTRATION_PATH)
+        self.rad_path = tk.StringVar(value=DAILY_REGISTRATION_PATH)
+        self.afv_path = tk.StringVar(value=AFV_ROSTER_PATH)
 
         self.outdir = tk.StringVar(value=str(Path.cwd() / "outputs"))
 
         self.mode = tk.StringVar(value="monthly")
-        self.quarter = tk.StringVar(value="Q4")
+        self.quarter = tk.StringVar(value=_current_fiscal_quarter(datetime.now()))
         self.year = tk.StringVar(value=str(datetime.now().year))
 
-        self.status = tk.StringVar(value="Select files to begin.")
+        self.status = tk.StringVar(value="Ready. Input workbooks will load automatically.")
         self.create_email_drafts = tk.BooleanVar(value=False)
         self.is_running = tk.BooleanVar(value=False)
 
@@ -157,15 +169,13 @@ class TRPApp:
         )
         ttk.Label(
             container,
-            text="Select program files, choose Monthly or Quarterly, then Run to generate audit-ready outputs.",
+            text="Choose Monthly or Quarterly, optionally request Outlook drafts, then Run.",
         ).grid(row=1, column=0, sticky="w", pady=(0, 14))
 
         # Cards
-        self._build_files_card(container, row=2)
-        self._build_options_card(container, row=3)
-        self._build_output_card(container, row=4)
-        self._build_actions_row(container, row=5)
-        self._build_status_card(container, row=6)
+        self._build_options_card(container, row=2)
+        self._build_actions_row(container, row=3)
+        self._build_status_card(container, row=4)
 
         # allow vertical expansion
         container.rowconfigure(7, weight=1)
@@ -221,30 +231,17 @@ class TRPApp:
             command=self._apply_mode_visibility,
         ).grid(row=2, column=0, sticky="w")
 
-        self.quarter_frame = ttk.Frame(card)
-        self.quarter_frame.grid(row=3, column=0, sticky="w", pady=(12, 0))
-
-        ttk.Label(self.quarter_frame, text="Quarter:").grid(row=0, column=0, sticky="w")
-        self.quarter_cb = ttk.Combobox(
-            self.quarter_frame,
-            textvariable=self.quarter,
-            values=FISCAL_QUARTERS,
-            width=6,
-            state="readonly",
-        )
-        self.quarter_cb.grid(row=0, column=1, sticky="w", padx=(8, 18))
-
-        ttk.Label(self.quarter_frame, text="Year:").grid(row=0, column=2, sticky="w")
-        self.year_entry = ttk.Entry(self.quarter_frame, textvariable=self.year, width=10)
-
         self.email_drafts_cb = ttk.Checkbutton(
             card,
             text="Create Outlook draft emails (lunch recipients + gift card winners)",
             variable=self.create_email_drafts,
         )
-        self.email_drafts_cb.grid(row=4, column=0, sticky="w", pady=(12, 0))
+        self.email_drafts_cb.grid(row=3, column=0, sticky="w", pady=(12, 0))
 
-        self.year_entry.grid(row=0, column=3, sticky="w", padx=(8, 0))
+        ttk.Label(
+            card,
+            text="Sources: TRP Daily Registration.xlsx and AFV_Current.xlsx (loaded automatically)",
+        ).grid(row=4, column=0, sticky="w", pady=(12, 0))
 
     def _build_output_card(self, parent, row: int) -> None:
         card = self._card(parent, "Output")
@@ -316,17 +313,12 @@ class TRPApp:
             self._set_status(f"Output folder set to: {path}")
 
     def _apply_mode_visibility(self) -> None:
-        if self.mode.get() == "quarterly":
-            self.quarter_frame.grid()
-        else:
-            self.quarter_frame.grid_remove()
+        return
 
     def _clear(self) -> None:
-        self.rbw_path.set("")
-        self.carpool_path.set("")
-        self.rad_path.set("")
-        self.afv_path.set("")
-        self._set_status("Cleared selections.")
+        self.mode.set("monthly")
+        self.create_email_drafts.set(False)
+        self._set_status("Options reset. Input workbooks will load automatically.")
 
     def _open_outputs(self) -> None:
         _open_folder(self.outdir.get().strip() or str(Path.cwd() / "outputs"))
@@ -363,40 +355,23 @@ class TRPApp:
             return None
                     
 
-        missing = []
-        if not rbw: missing.append("RBW")
-        if not carpool: missing.append("Carpool")
+        required = [("TRP Daily Registration", rbw)]
         if mode == "quarterly":
-            if not rad: missing.append("RAD")
-            if not afv: missing.append("AFV")
+            required.append(("AFV roster", afv))
+        missing = [f"{label}: {path}" for label, path in required if not os.path.isfile(path)]
         if missing:
-            messagebox.showerror("Missing files", f"Please select files for: {', '.join(missing)}")
-            return None
-
-      
-
-        missing = []
-        if not rbw: missing.append("RBW")
-        if not carpool: missing.append("Carpool")
-        if mode == "quarterly":
-            if not rad: missing.append("RAD")
-            if not afv: missing.append("AFV")
-        if missing:
-            messagebox.showerror("Missing files", f"Please select files for: {', '.join(missing)}")
+            messagebox.showerror(
+                "Automatic input unavailable",
+                "Could not access the following automatic input file(s):\n\n" + "\n".join(missing),
+            )
             return None
 
         quarter = None
         year = None
         if mode == "quarterly":
-            quarter = self.quarter.get().strip().upper()
-            if quarter not in FISCAL_QUARTERS:
-                messagebox.showerror("Invalid quarter", "Quarter must be Q1, Q2, Q3, or Q4.")
-                return None
-            try:
-                year = int(self.year.get().strip())
-            except Exception:
-                messagebox.showerror("Invalid year", "Year must be a number (e.g., 2026).")
-                return None
+            now = datetime.now()
+            quarter = _current_fiscal_quarter(now)
+            year = now.year
 
         return RunConfig(
             rbw_path=rbw,

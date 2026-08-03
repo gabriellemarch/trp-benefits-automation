@@ -155,11 +155,14 @@ def get_first_column(df: pd.DataFrame, candidates: List[str]) -> pd.Series:
 
 def load_rbw(path: str) -> pd.DataFrame:
     df = read_table(path)
+    registration_type = get_first_column(df, ["What are you registering?", "Program"])
+    if registration_type.notna().any():
+        df = df[registration_type.astype(str).str.strip().str.casefold().eq("run bike walk")].copy()
     out = pd.DataFrame({
         "name_raw": df.get("Name"),
         "badge_raw": df.get("Badge ID Number"),
         "email_raw": df.get("Email"),
-        "created_raw": df.get("Created"),
+        "created_raw": get_first_column(df, ["Created", "Completion time", "Start time"]),
     })
     out["program"] = PROGRAM_RBW
     out["created_date"] = parse_datetime(out["created_raw"])
@@ -167,11 +170,14 @@ def load_rbw(path: str) -> pd.DataFrame:
 
 def load_carpool(path: str) -> pd.DataFrame:
     df = read_table(path)
+    registration_type = get_first_column(df, ["What are you registering?", "Program"])
+    if registration_type.notna().any():
+        df = df[registration_type.astype(str).str.strip().str.casefold().eq("carpool")].copy()
     out = pd.DataFrame({
         "name_raw": df.get("Name"),
         "badge_raw": df.get("Badge ID Number"),
         "email_raw": df.get("Email"),
-        "created_raw": df.get("Created"),
+        "created_raw": get_first_column(df, ["Created", "Completion time", "Start time"]),
     })
     out["program"] = PROGRAM_CARPOOL
     out["created_date"] = parse_datetime(out["created_raw"])
@@ -179,11 +185,14 @@ def load_carpool(path: str) -> pd.DataFrame:
 
 def load_rad(path: str) -> pd.DataFrame:
     df = read_table(path)
+    registration_type = get_first_column(df, ["What are you registering?", "Program"])
+    if registration_type.notna().any():
+        df = df[registration_type.astype(str).str.strip().str.casefold().eq("refuel after dark")].copy()
     out = pd.DataFrame({
         "name_raw": df.get("Name"),
         "badge_raw": df.get("Badge ID Number"),
-        "email_raw": df.get("Microchip Email"),
-        "created_raw": df.get("Refuel Date and Time"),
+        "email_raw": get_first_column(df, ["Microchip Email", "Email"]),
+        "created_raw": get_first_column(df, ["Refuel Date and Time", "Completion time", "Start time"]),
     })
     out["program"] = PROGRAM_RAD
     out["created_date"] = parse_datetime(out["created_raw"])

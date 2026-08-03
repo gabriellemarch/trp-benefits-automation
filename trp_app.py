@@ -210,7 +210,7 @@ def run_trp(
     )
 
 
-    should_create_email_drafts = bool(create_email_drafts) or mode == "quarterly"
+    should_create_email_drafts = bool(create_email_drafts)
     if should_create_email_drafts:
         status("Creating Outlook drafts...")
         draft_counts = core.create_outlook_drafts(
@@ -222,7 +222,7 @@ def run_trp(
         run_log["outlook_drafts"] = {
             "enabled": True,
             "requested": bool(create_email_drafts),
-            "forced_for_quarterly": mode == "quarterly",
+            "forced_for_quarterly": False,
             **draft_counts,
         }
         core.write_outputs(
