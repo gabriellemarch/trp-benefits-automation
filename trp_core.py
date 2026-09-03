@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -26,8 +27,10 @@ from openpyxl.utils import get_column_letter
 
 try:
     import win32com.client  # type: ignore
+    import pythoncom  # type: ignore
 except Exception:
     win32com = None  # type: ignore
+    pythoncom = None  # type: ignore
 # ----------------------------
 # Config
 # ----------------------------
@@ -69,7 +72,19 @@ def read_table(path: str) -> pd.DataFrame:
     if ext in [".csv"]:
         return read_csv_with_fallback_encoding(path)
     if ext in [".xlsx", ".xls"]:
-        return pd.read_excel(path)
+        # Shared OneDrive workbooks can be briefly locked while Excel or
+        # OneDrive is saving/syncing. Retry before presenting a useful error.
+        for attempt in range(3):
+            try:
+                return pd.read_excel(path)
+            except PermissionError as exc:
+                if attempt == 2:
+                    raise PermissionError(
+                        f"Could not read the shared workbook after 3 attempts: {path}\n\n"
+                        "Close the workbook in Excel, wait for OneDrive to finish syncing, "
+                        "then run the report again."
+                    ) from exc
+                time.sleep(1)
     # fallback: try csv
     return read_csv_with_fallback_encoding(path)
 
@@ -172,7 +187,10 @@ def load_rbw(path: str) -> pd.DataFrame:
     df = read_table(path)
     registration_type = get_first_column(df, ["What are you registering?", "Program"])
     if registration_type.notna().any():
-        df = df[registration_type.astype(str).str.strip().str.casefold().eq("run bike walk")].copy()
+        # The Forms option has appeared as both "Run Bike Walk" and
+        # "Run Bike Walk Bus". Both represent the RBW benefit program.
+        registration_key = registration_type.astype(str).str.strip().str.casefold()
+        df = df[registration_key.isin(["run bike walk", "run bike walk bus"])].copy()
     out = pd.DataFrame({
         "name_raw": df.get("Name"),
         "badge_raw": get_first_column(df, ["Badge ID Number", "Badge Number", "Badge #", "Badge"]),
@@ -287,16 +305,15 @@ def _trip_identity_mask(df: pd.DataFrame) -> pd.Series:
 
 
 def _add_form_identity_key(df: pd.DataFrame) -> pd.DataFrame:
-    """Use normalized badge identity, with Form email/name as fallbacks."""
+    """Use Form email identity, with normalized badge/name as fallbacks."""
     out = df.copy()
     badge_key = out["badge_id"].fillna("").astype(str).str.strip().str.casefold()
     email_key = out["email"].fillna("").astype(str).str.strip().str.casefold()
     name_key = out["name"].fillna("").astype(str).str.strip().str.casefold()
-    out["participant_key"] = badge_key
-    missing_badge = badge_key.str.len() == 0
-    out.loc[missing_badge, "participant_key"] = email_key[missing_badge]
-    missing_badge_and_email = missing_badge & email_key.str.len().eq(0)
-    out.loc[missing_badge_and_email, "participant_key"] = name_key[missing_badge_and_email]
+    valid_email = email_key.str.contains("@", na=False)
+    out["participant_key"] = email_key.where(valid_email, badge_key)
+    missing_email_and_badge = ~valid_email & badge_key.str.len().eq(0)
+    out.loc[missing_email_and_badge, "participant_key"] = name_key[missing_email_and_badge]
     return out
 
 def _removed_duplicate_rows(df: pd.DataFrame, subset: List[str]) -> pd.DataFrame:
@@ -513,13 +530,12 @@ def rbw_carpool_with_trip_keys(period_df: pd.DataFrame) -> pd.DataFrame:
     df["email_key"] = df["email"].fillna("").astype(str).str.strip().str.lower()
     df["badge_key"] = df["badge_id"].apply(clean_badge).str.casefold()
 
-    # Badge IDs also support manually collected data (such as July). Form email
-    # and name remain fallbacks for records where no badge was supplied.
-    df["participant_key"] = df["badge_key"]
-    missing_badge = df["badge_key"].str.len() == 0
-    df.loc[missing_badge, "participant_key"] = df.loc[missing_badge, "email_key"]
-    missing_badge_and_email = missing_badge & df["email_key"].str.len().eq(0)
-    df.loc[missing_badge_and_email, "participant_key"] = df.loc[missing_badge_and_email, "name_key"]
+    # A consistent email joins entries where a participant mistyped or changed
+    # their badge. Badge IDs still support manually collected rows without email.
+    valid_email = df["email_key"].str.contains("@", na=False)
+    df["participant_key"] = df["email_key"].where(valid_email, df["badge_key"])
+    missing_email_and_badge = ~valid_email & df["badge_key"].str.len().eq(0)
+    df.loc[missing_email_and_badge, "participant_key"] = df.loc[missing_email_and_badge, "name_key"]
 
     df = df[df["participant_key"].str.len() > 0]
     df["created_date"] = pd.to_datetime(df["created_date"], errors="coerce")
@@ -1022,7 +1038,22 @@ def assert_expected_outputs(outdir: str) -> None:
     if missing:
         # raise FileNotFoundError("Expected output files missing:\n" + "\n".join(missing))
         raise FileNotFoundError("Expected output files missing:\n" + "\n".join(missing))
-    
+
+def _add_and_resolve_outlook_recipients(mail, emails: List[str]) -> None:
+    """Add SMTP addresses individually and require Outlook to resolve them."""
+    added = []
+    for email in emails:
+        recipient = mail.Recipients.Add(email)
+        recipient.Type = 1  # Outlook olTo
+        added.append((email, recipient))
+
+    if not mail.Recipients.ResolveAll():
+        unresolved = [email for email, recipient in added if not recipient.Resolved]
+        details = ", ".join(unresolved) if unresolved else "one or more recipients"
+        raise RuntimeError(
+            "Outlook could not resolve these recipient addresses: " + details
+        )
+
 def create_outlook_drafts(
     lunch_report: pd.DataFrame,
     winners_report: pd.DataFrame,
@@ -1036,7 +1067,7 @@ def create_outlook_drafts(
 
     Returns counts for recipients in each draft.
     """
-    if win32com is None:
+    if win32com is None or pythoncom is None:
         raise RuntimeError(
             "pywin32 is not installed. Install it with: pip install pywin32"
         )
@@ -1059,11 +1090,14 @@ def create_outlook_drafts(
     )
     winner_emails = sorted({e for e in winner_emails if "@" in e})
 
+    # This function is called by the GUI from a background thread. COM must be
+    # initialized separately in every thread that automates Outlook.
+    pythoncom.CoInitialize()
     outlook = win32com.client.Dispatch("Outlook.Application")
 
     if lunch_emails:
         lunch_mail = outlook.CreateItem(0)
-        lunch_mail.To = "; ".join(lunch_emails)
+        _add_and_resolve_outlook_recipients(lunch_mail, lunch_emails)
         lunch_mail.Subject = "TRP Lunch Benefit: Your Lunch Checklist"
         lunch_mail.Body = (
             "Hi everyone,\n\n"
@@ -1077,7 +1111,7 @@ def create_outlook_drafts(
 
     if winner_emails:
         winner_mail = outlook.CreateItem(0)
-        winner_mail.To = "; ".join(winner_emails)
+        _add_and_resolve_outlook_recipients(winner_mail, winner_emails)
         winner_mail.Subject = "Congratulations! You Won a TRP Gift Card"
         winner_mail.Body = (
             "Hi,\n\n"
