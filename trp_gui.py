@@ -66,27 +66,37 @@ except Exception as _imp_err:
     IMPORT_ERROR_TEXT = str(_imp_err)
 
 FISCAL_QUARTERS = ["Q1", "Q2", "Q3", "Q4"]  # Q1: Apr–Jun, Q2: Jul–Sep, Q3: Oct–Dec, Q4: Jan–Mar
-AFV_ROSTER_PATH = r"X:\Trip Reduction\AFV\AFV_Current.xlsx"
-
-
-def _resolve_daily_registration_path() -> str:
-    """Find the shared Forms workbook for either collaborator's OneDrive layout."""
+def _shared_data_folders() -> list[Path]:
+    """Return the centralized TRP data folder for supported OneDrive layouts."""
     onedrive_root = Path.home() / "OneDrive - Microchip Technology Inc"
-    shared_folders = [
+    shared_roots = [
         onedrive_root / "Rylee&Gabby",
         onedrive_root / "Gabrielle March - C79084's files - Rylee&Gabby",
     ]
-    expected_name = "new trp daily registration.xlsx"
+    return [folder / "TRP - Python Data Pulls" for folder in shared_roots]
 
-    for folder in shared_folders:
+
+def _resolve_shared_workbook(expected_name: str) -> str:
+    """Find a workbook despite OneDrive's occasional non-breaking spaces."""
+    normalized_expected = expected_name.replace("\xa0", " ").strip().casefold()
+
+    for folder in _shared_data_folders():
         if not folder.is_dir():
             continue
         for workbook in folder.glob("*.xlsx"):
             normalized_name = workbook.name.replace("\xa0", " ").strip().casefold()
-            if normalized_name == expected_name:
+            if normalized_name == normalized_expected:
                 return str(workbook)
 
-    return str(shared_folders[0] / "New TRP Daily Registration.xlsx")
+    return str(_shared_data_folders()[0] / expected_name)
+
+
+def _resolve_daily_registration_path() -> str:
+    return _resolve_shared_workbook("New TRP Daily Registration.xlsx")
+
+
+def _resolve_afv_roster_path() -> str:
+    return _resolve_shared_workbook("Alternative Fuel Vehicle Registration.xlsx")
 
 
 def _current_fiscal_quarter(now: datetime) -> str:
@@ -155,7 +165,7 @@ class TRPApp:
         self.rbw_path = tk.StringVar(value=daily_registration_path)
         self.carpool_path = tk.StringVar(value=daily_registration_path)
         self.rad_path = tk.StringVar(value=daily_registration_path)
-        self.afv_path = tk.StringVar(value=AFV_ROSTER_PATH)
+        self.afv_path = tk.StringVar(value=_resolve_afv_roster_path())
 
         self.outdir = tk.StringVar(value=str(Path.cwd() / "outputs"))
 
@@ -260,7 +270,10 @@ class TRPApp:
 
         ttk.Label(
             card,
-            text="Sources: TRP Daily Registration.xlsx and AFV_Current.xlsx (loaded automatically)",
+            text=(
+                "Sources: New TRP Daily Registration.xlsx and "
+                "Alternative Fuel Vehicle Registration.xlsx (loaded automatically)"
+            ),
         ).grid(row=4, column=0, sticky="w", pady=(12, 0))
 
     def _build_output_card(self, parent, row: int) -> None:
