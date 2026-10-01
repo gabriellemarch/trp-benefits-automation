@@ -39,7 +39,7 @@ import os
 import sys
 import threading
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -109,6 +109,13 @@ def _current_fiscal_quarter(now: datetime) -> str:
     return "Q3"
 
 
+def _completed_fiscal_quarter(now: datetime) -> tuple[str, int]:
+    """Return the last completed fiscal quarter and its calendar year."""
+    quarter_start_month = ((now.month - 1) // 3) * 3 + 1
+    previous_quarter_end = now.replace(month=quarter_start_month, day=1) - timedelta(days=1)
+    return _current_fiscal_quarter(previous_quarter_end), previous_quarter_end.year
+
+
 @dataclass
 class RunConfig:
     rbw_path: str
@@ -170,8 +177,9 @@ class TRPApp:
         self.outdir = tk.StringVar(value=str(Path.cwd() / "outputs"))
 
         self.mode = tk.StringVar(value="monthly")
-        self.quarter = tk.StringVar(value=_current_fiscal_quarter(datetime.now()))
-        self.year = tk.StringVar(value=str(datetime.now().year))
+        completed_quarter, completed_year = _completed_fiscal_quarter(datetime.now())
+        self.quarter = tk.StringVar(value=completed_quarter)
+        self.year = tk.StringVar(value=str(completed_year))
 
         self.status = tk.StringVar(value="Ready. Input workbooks will load automatically.")
         self.create_email_drafts = tk.BooleanVar(value=False)
@@ -247,7 +255,7 @@ class TRPApp:
 
         ttk.Radiobutton(
             card,
-            text="Monthly (uses reporting-month rule; prevents early next-month entries from hijacking lunches)",
+            text="Monthly (uses previous completed calendar month for lunches and monthly winners)",
             variable=self.mode,
             value="monthly",
             command=self._apply_mode_visibility,
@@ -255,7 +263,7 @@ class TRPApp:
 
         ttk.Radiobutton(
             card,
-            text="Quarterly (select fiscal quarter + year; RAD uses full quarter; AFV uses roster)",
+            text="Quarterly (uses last completed fiscal quarter; RAD uses full quarter; AFV uses roster)",
             variable=self.mode,
             value="quarterly",
             command=self._apply_mode_visibility,
@@ -402,9 +410,7 @@ class TRPApp:
         quarter = None
         year = None
         if mode == "quarterly":
-            now = datetime.now()
-            quarter = _current_fiscal_quarter(now)
-            year = now.year
+            quarter, year = _completed_fiscal_quarter(datetime.now())
 
         return RunConfig(
             rbw_path=rbw,

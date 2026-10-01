@@ -420,21 +420,9 @@ def last_business_day(y: int, m: int) -> date:
         d = date.fromordinal(d.toordinal() - 1)
     return d
 
-def reporting_month_for_run(run_dt: datetime, cutoff_day: int = 15) -> Tuple[int, int]:
-    """
-    Monthly reporting period selection:
-    - If run day <= cutoff_day: previous month
-    - Else: current month ONLY if run day is last business day of month; otherwise previous month
-    """
-    y, m, d = run_dt.year, run_dt.month, run_dt.day
-
-    if d <= cutoff_day:
-        return prev_year_month(y, m)
-
-    if run_dt.date() == last_business_day(y, m):
-        return (y, m)
-
-    return prev_year_month(y, m)
+def reporting_month_for_run(run_dt: datetime) -> Tuple[int, int]:
+    """Use the last completed calendar month, regardless of available data."""
+    return prev_year_month(run_dt.year, run_dt.month)
 
 # ----------------------------
 # Filtering helpers

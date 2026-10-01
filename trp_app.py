@@ -25,12 +25,12 @@ def run_trp(
     Single entry point for GUI (and optional future CLI).
 
     Monthly:
-      - reporting_month_for_run(today, cutoff_day=15)
-      - if month has no RBW/CARPOOL rows, fallback to most_recent_month_from_rbw_carpool(data)
+      - lunches + monthly winners use the previous calendar month
+      - missing reporting-month activity is an error, never a period fallback
 
     Quarterly:
-      - user supplies quarter + year
-      - lunches + monthly winners use most recent month WITHIN that quarter (based on RBW/CARPOOL dates)
+      - GUI supplies the last completed quarter + calendar year
+      - lunches + monthly winners use the final month of that quarter
       - RAD uses the full quarter date range
       - AFV uses roster only
       - no one can win twice in a single run (cross-pool exclusions)
@@ -73,7 +73,7 @@ def run_trp(
     standardized_rad = core.standardize(rad) if not rad.empty else pd.DataFrame()
     standardized_afv = core.standardize(afv) if not afv.empty else pd.DataFrame()
     inputs = [df for df in [trip_master, standardized_rad, standardized_afv] if not df.empty]
-    master = pd.concat(inputs, ignore_index=True)
+    master = pd.concat(inputs, ignore_index=True) if inputs else trip_master.copy()
 
     run_dt = datetime.now()
 
@@ -102,21 +102,17 @@ def run_trp(
     # -------------------------
     if mode == "monthly":
         status("Selecting reporting month...")
-        y, m = core.reporting_month_for_run(run_dt, cutoff_day=15)
-        run_log["reporting_month_rule"] = "day<=15 => prev month; else current only on last business day; else prev month"
+        y, m = core.reporting_month_for_run(run_dt)
+        run_log["reporting_month_rule"] = "previous completed calendar month"
         run_log["selected_period"] = {"year": y, "month": m}
         run_log["selected_period_reason"] = f"reporting_month_for_run({run_dt.date().isoformat()})"
 
         month_df = core.filter_month(master, y, m)
 
-        # If selected month has no RBW/CARPOOL activity, fallback to most recent month in data
+        # Never substitute a different month when the expected data is missing.
         rbw_cp = month_df[month_df["program"].isin([core.PROGRAM_RBW, core.PROGRAM_CARPOOL])].dropna(subset=["created_date"])
         if rbw_cp.empty:
-            status("No RBW/CARPOOL activity found in selected reporting month; falling back to most recent month in data.")
-            y, m = core.most_recent_month_from_rbw_carpool(master)
-            month_df = core.filter_month(master, y, m)
-            run_log["selected_period"] = {"year": y, "month": m}
-            run_log["selected_period_reason"] = "fallback_to_most_recent_month_in_data"
+            raise ValueError(f"No RBW/CARPOOL activity found for {y}-{m:02d}. Check the daily registration workbook; the reporting month will not be changed automatically.")
 
         seed = core.build_run_seed("MONTHLY", y, m, None)
         run_log["random_seed"] = seed
@@ -152,21 +148,27 @@ def run_trp(
         status(f"Running quarterly logic for {q} {y}...")
         run_log["fiscal_quarter"] = q
         run_log["period_year"] = y
-        quarter_calendar_year, quarter_year_mode = core.resolve_quarter_calendar_year(master, q, y)
+        quarter_calendar_year, quarter_year_mode = y, "calendar_year"
         run_log["quarter_calendar_year_used"] = quarter_calendar_year
         run_log["quarter_year_interpretation"] = quarter_year_mode
 
         # RBW/CARPOOL month used for lunches + monthly drawing:
-        my, mm = core.most_recent_month_in_quarter(master, q, quarter_calendar_year)
+        my, mm = quarter_calendar_year, core.quarter_months(q)[-1]
+        run_log["reporting_month_rule"] = "final calendar month of selected completed quarter"
+        run_log["selected_period"] = {"year": my, "month": mm}
+        run_log["selected_period_reason"] = "final_month_of_quarter"
         run_log["quarter_recent_month_used_for_lunches"] = {"year": my, "month": mm}
 
         month_df = core.filter_month(master, my, mm)
+        rbw_cp = month_df[month_df["program"].isin([core.PROGRAM_RBW, core.PROGRAM_CARPOOL])].dropna(subset=["created_date"])
+        if rbw_cp.empty:
+            raise ValueError(f"No RBW/CARPOOL activity found for {my}-{mm:02d}, the final month of {q} {y}. Check the daily registration workbook; the reporting period will not be changed automatically.")
         quarter_df = core.filter_quarter(master, q, quarter_calendar_year)
 
         seed = core.build_run_seed("QUARTERLY", y, mm, q)
         run_log["random_seed"] = seed
 
-        status(f"Calculating lunches for {my}-{mm:02d} (most recent month in quarter)...")
+        status(f"Calculating lunches for {my}-{mm:02d} (final month in quarter)...")
         duplicate_daily_trips = core.audit_duplicate_daily_trips(core.filter_month(trip_audit_master, my, mm))
         run_log["duplicate_daily_trip_audit"] = {
             "rule": "RBW/CARPOOL count at most one trip per participant per calendar date",
